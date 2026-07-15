@@ -1,7 +1,7 @@
 import type { StateStore } from "./state-store";
 import type { ImageJob, RoundFinalizeJob } from "./types";
 
-export const ROUND_INACTIVITY_SECONDS = 60;
+export const ROUND_INACTIVITY_SECONDS = 20;
 export const ROUND_STATE_TTL_SECONDS = 10 * 60;
 
 export type RoundEvidenceKind = "wrong-amount" | "uncertain";

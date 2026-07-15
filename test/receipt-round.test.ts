@@ -30,6 +30,10 @@ function job(messageId: string, sender = "U1", group = "G1"): ImageJob {
 }
 
 describe("receipt round state", () => {
+  it("uses a 20-second inactivity window", () => {
+    expect(ROUND_INACTIVITY_SECONDS).toBe(20);
+  });
+
   it("groups separate LINE albums from the same sender and conversation", () => {
     expect(receiptRoundKey({ ...job("one"), imageSetId: "album-A" })).toBe(
       receiptRoundKey({ ...job("two"), imageSetId: "album-B" }),
@@ -54,12 +58,12 @@ describe("receipt round state", () => {
       "generation-2",
     );
 
-    expect(await finalizeRound(first!, state, 61_000)).toEqual({ status: "stale" });
-    expect(await finalizeRound(second!, state, 70_000)).toEqual({
+    expect(await finalizeRound(first!, state, 21_000)).toEqual({ status: "stale" });
+    expect(await finalizeRound(second!, state, 30_000)).toEqual({
       status: "waiting",
       retryAfterSeconds: 1,
     });
-    expect((await finalizeRound(second!, state, 71_000)).status).toBe("finalized");
+    expect((await finalizeRound(second!, state, 31_000)).status).toBe("finalized");
   });
 
   it("keeps a wrong amount over a later unclear image", async () => {
@@ -99,7 +103,9 @@ describe("receipt round state", () => {
       0,
       "generation-1",
     );
-    expect(await finalizeRound(finalizer!, state, 60_000)).toEqual({
+    expect(
+      await finalizeRound(finalizer!, state, ROUND_INACTIVITY_SECONDS * 1000),
+    ).toEqual({
       status: "finalized",
       evidence: undefined,
     });
@@ -115,6 +121,8 @@ describe("receipt round state", () => {
       "generation-1",
     );
     await completeRoundAfterPass(job("two"), state, 10_000);
-    expect(await finalizeRound(finalizer!, state, 60_000)).toEqual({ status: "stale" });
+    expect(
+      await finalizeRound(finalizer!, state, ROUND_INACTIVITY_SECONDS * 1000),
+    ).toEqual({ status: "stale" });
   });
 });
