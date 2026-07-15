@@ -36,7 +36,12 @@ import {
 } from "./line";
 import { hasRecentPass, recordRecentPass } from "./reply-state";
 import { isImageProcessed, markImageProcessed } from "./processing-state";
-import { recordReceiptEvidence, type ReceiptKind } from "./receipt-round";
+import {
+  recordReceiptEvidence,
+  shouldReplyToIndividualFailure,
+  type ReceiptKind,
+} from "./receipt-round";
+import { d1StateStore } from "./state-store";
 import type { ImageJob, LineWebhookBody } from "./types";
 
 type ProcessOutcome = "pass" | "fail" | "ignored";
@@ -74,7 +79,7 @@ async function recordRoundCandidate(
   env: Env,
 ): Promise<ProcessOutcome> {
   const round = await recordReceiptEvidence(
-    env.REPLY_STATE,
+    d1StateStore(env.CONTROL_DB),
     job,
     kind,
     amount,
@@ -101,7 +106,7 @@ async function recordRoundCandidate(
     env.LINE_CHANNEL_ACCESS_TOKEN,
     String(env.ENABLE_PUSH_FALLBACK) === "true",
   );
-  await recordRecentPass(job, env.REPLY_STATE);
+  await recordRecentPass(job, d1StateStore(env.CONTROL_DB));
 
   console.log(JSON.stringify({
     event: "receipt_round_completed",
@@ -159,7 +164,7 @@ async function processImageJob(job: ImageJob, env: Env): Promise<ProcessOutcome>
   const expectedVoid = numericSetting(env.EXPECTED_VOID_AMOUNT, "EXPECTED_VOID_AMOUNT");
   const minConfidence = numericSetting(env.MIN_CONFIDENCE, "MIN_CONFIDENCE");
 
-  if (await hasRecentPass(job, env.REPLY_STATE)) {
+  if (await hasRecentPass(job, d1StateStore(env.CONTROL_DB))) {
     console.log(JSON.stringify({
       event: "image_ignored",
       webhookEventId: job.webhookEventId,
@@ -187,10 +192,26 @@ async function processImageJob(job: ImageJob, env: Env): Promise<ProcessOutcome>
     }
 
     if (ocrSpaceResult) {
-      ocrSpaceUsage = await recordOcrSpaceRequest(env.REPLY_STATE);
+      try {
+        ocrSpaceUsage = await recordOcrSpaceRequest(env.REPLY_STATE);
+      } catch (error) {
+        console.warn(JSON.stringify({
+          event: "ocr_space_usage_record_failed",
+          webhookEventId: job.webhookEventId,
+          error: error instanceof Error ? error.message : "unknown error",
+        }));
+      }
       if (ocrSpaceResult.status === "quota-exhausted") {
         await recordStat(env, "ocrSpaceErrors");
-        await markOcrSpaceQuotaExhausted(env.REPLY_STATE);
+        try {
+          await markOcrSpaceQuotaExhausted(env.REPLY_STATE);
+        } catch (error) {
+          console.warn(JSON.stringify({
+            event: "ocr_space_quota_marker_failed",
+            webhookEventId: job.webhookEventId,
+            error: error instanceof Error ? error.message : "unknown error",
+          }));
+        }
         ocrSpaceUsage = 500;
         console.log(JSON.stringify({
           event: "ocr_space_fallback",
@@ -252,7 +273,7 @@ async function processImageJob(job: ImageJob, env: Env): Promise<ProcessOutcome>
           ocrSpaceInspection.hasSettlement &&
           ocrSpaceHasAnyAmount
         ) {
-          if (await hasRecentPass(job, env.REPLY_STATE)) {
+          if (await hasRecentPass(job, d1StateStore(env.CONTROL_DB))) {
             console.log(JSON.stringify({
               event: "image_ignored",
               webhookEventId: job.webhookEventId,
@@ -262,12 +283,14 @@ async function processImageJob(job: ImageJob, env: Env): Promise<ProcessOutcome>
             return "ignored";
           }
 
-          await sendInspectionResult(
-            job,
-            formatDecision(ocrSpaceInspection, ocrSpaceDecision),
-            env.LINE_CHANNEL_ACCESS_TOKEN,
-            String(env.ENABLE_PUSH_FALLBACK) === "true",
-          );
+          if (shouldReplyToIndividualFailure(job)) {
+            await sendInspectionResult(
+              job,
+              formatDecision(ocrSpaceInspection, ocrSpaceDecision),
+              env.LINE_CHANNEL_ACCESS_TOKEN,
+              String(env.ENABLE_PUSH_FALLBACK) === "true",
+            );
+          }
           console.log(JSON.stringify({
             event: "receipt_processed",
             webhookEventId: job.webhookEventId,
@@ -490,7 +513,7 @@ async function processImageJob(job: ImageJob, env: Env): Promise<ProcessOutcome>
     );
   }
 
-  if (await hasRecentPass(job, env.REPLY_STATE)) {
+  if (await hasRecentPass(job, d1StateStore(env.CONTROL_DB))) {
     console.log(JSON.stringify({
       event: "image_ignored",
       webhookEventId: job.webhookEventId,
@@ -501,12 +524,14 @@ async function processImageJob(job: ImageJob, env: Env): Promise<ProcessOutcome>
     return "ignored";
   }
 
-  await sendInspectionResult(
-    job,
-    formatDecision(inspection, decision),
-    env.LINE_CHANNEL_ACCESS_TOKEN,
-    String(env.ENABLE_PUSH_FALLBACK) === "true",
-  );
+  if (shouldReplyToIndividualFailure(job)) {
+    await sendInspectionResult(
+      job,
+      formatDecision(inspection, decision),
+      env.LINE_CHANNEL_ACCESS_TOKEN,
+      String(env.ENABLE_PUSH_FALLBACK) === "true",
+    );
+  }
   console.log(JSON.stringify({
     event: "receipt_processed",
     webhookEventId: job.webhookEventId,
@@ -545,7 +570,8 @@ export default {
       try {
         if (message.attempts === 1) await recordStat(env, "received");
 
-        if (await isImageProcessed(message.body, env.REPLY_STATE)) {
+        const operationalState = d1StateStore(env.CONTROL_DB);
+        if (await isImageProcessed(message.body, operationalState)) {
           await recordStat(env, "duplicates");
           await recordStat(env, "ignored");
           console.log(JSON.stringify({
@@ -567,7 +593,7 @@ export default {
             messageId: message.id,
             stage: "processing-disabled",
           }));
-          await markImageProcessed(message.body, env.REPLY_STATE);
+          await markImageProcessed(message.body, operationalState);
           await recordStat(env, "processed");
           await recordStat(env, "ignored");
           message.ack();
@@ -576,7 +602,7 @@ export default {
 
         const outcome = await processImageJob(message.body, env);
         try {
-          await markImageProcessed(message.body, env.REPLY_STATE);
+          await markImageProcessed(message.body, operationalState);
         } catch (error) {
           console.error(JSON.stringify({
             event: "processed_image_marker_failed",

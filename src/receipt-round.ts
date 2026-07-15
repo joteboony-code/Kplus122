@@ -1,9 +1,14 @@
 import type { ImageJob } from "./types";
+import type { StateStore } from "./state-store";
 
 export const RECEIPT_ROUND_SECONDS = 5 * 60;
 export const IMAGE_SET_RETENTION_SECONDS = 60 * 60;
 
 export type ReceiptKind = "kplus" | "kbank";
+
+export function shouldReplyToIndividualFailure(job: ImageJob): boolean {
+  return !job.imageSetId;
+}
 
 interface RoundEvidence {
   messageId: string;
@@ -59,7 +64,7 @@ function parseState(
 }
 
 export async function recordReceiptEvidence(
-  kv: KVNamespace,
+  kv: StateStore,
   job: ImageJob,
   kind: ReceiptKind,
   amount: number,

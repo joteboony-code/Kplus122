@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   RECEIPT_ROUND_SECONDS,
   recordReceiptEvidence,
+  shouldReplyToIndividualFailure,
 } from "../src/receipt-round";
 import type { ImageJob } from "../src/types";
 
@@ -32,6 +33,11 @@ function job(
 }
 
 describe("receipt round state", () => {
+  it("does not reply fail from an individual image inside a LINE album", () => {
+    expect(shouldReplyToIndividualFailure(job("one", "U1", "G1", "album-A"))).toBe(false);
+    expect(shouldReplyToIndividualFailure(job("one"))).toBe(true);
+  });
+
   it("completes only after separate KPLUS and KBANK images from one sender", async () => {
     const kv = memoryKv();
     const first = await recordReceiptEvidence(kv, job("kplus"), "kplus", 1.22, 1_000);

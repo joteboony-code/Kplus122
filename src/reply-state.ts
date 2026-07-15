@@ -1,4 +1,5 @@
 import type { ImageJob } from "./types";
+import type { StateStore } from "./state-store";
 
 export const RECENT_PASS_TTL_SECONDS = 60;
 
@@ -12,7 +13,7 @@ export function recentPassKey(job: ImageJob): string | null {
 
 export async function hasRecentPass(
   job: ImageJob,
-  state: KVNamespace,
+  state: StateStore,
 ): Promise<boolean> {
   const key = recentPassKey(job);
   if (!key) return false;
@@ -21,7 +22,7 @@ export async function hasRecentPass(
 
 export async function recordRecentPass(
   job: ImageJob,
-  state: KVNamespace,
+  state: StateStore,
 ): Promise<void> {
   const key = recentPassKey(job);
   if (!key) return;
