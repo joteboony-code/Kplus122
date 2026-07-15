@@ -235,7 +235,7 @@ function controlPage(enabled: boolean, providers: ProviderStatus): string {
     <div class="item"><small>OCR.space วันนี้</small><b class="${providers.ocrSpaceConfigured ? "ok" : "warn"}">${providers.ocrSpaceUsage} / ${OCR_SPACE_DAILY_LIMIT} รูป</b><div class="meter"><span></span></div><em>${ocrSpaceState}</em></div>
     <div class="item"><small>Workers AI</small><b class="${enabled ? "ok" : ""}">${enabled ? "พร้อมเป็นระบบสำรอง" : "ไม่ถูกเรียกใช้งาน"}</b><em>ระบบไม่สามารถอ่านโควตาคงเหลือจาก binding ได้</em></div>
     <div class="item"><small>Google Vision เดือนนี้ (ประมาณการ)</small><b class="${googleVisionTone}">${providers.googleVisionUsage} / ${GOOGLE_VISION_FREE_MONTHLY_UNITS} units</b><div class="meter"><span style="width:${Math.min((providers.googleVisionUsage / GOOGLE_VISION_FREE_MONTHLY_UNITS) * 100, 100)}%;background:${googleVisionTone === "danger" ? "#f06474" : googleVisionTone === "warn" ? "#ffd477" : "#30dc78"}"></span></div><em>${googleVisionState}</em></div>
-    <div class="item"><small>คิวและกฎปัจจุบัน</small><b>ประมวลผลทีละ 1 รูป · พักหลังผ่าน 60 วินาที</b><em>K+/KPLUS/THAIQR/Thai QR Payment/QR PAYMENT · ต้องพบ SETTLEMENT · ยอด 1.22 หรือ -1.22 บาท</em></div>
+    <div class="item"><small>คิวและกฎปัจจุบัน</small><b>1 รอบต่อผู้ส่งภายใน 5 นาที · ต้องพบสลิปคนละ 2 ใบ</b><em>KPLUS/K+ + SETTLEMENT + ยอด 1.22/-1.22 · KBANK + SETTLEMENT + ยอดใดก็ได้</em></div>
   </div>
   <div class="notice">OCR.space นับตามวันที่ประเทศไทย ส่วน Google Vision เป็นค่าประมาณรายเดือนที่นับเฉพาะคำขอสำเร็จจาก Worker นี้ตั้งแต่เริ่มใช้ตัวนับ ไม่รวมระบบอื่นใน Google Cloud Project การเปลี่ยนสถานะอาจใช้เวลาสั้น ๆ ก่อนมีผลครบทุกศูนย์ข้อมูล</div></section></main></body></html>`;
 }

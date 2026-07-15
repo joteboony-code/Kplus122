@@ -1,4 +1,8 @@
-import type { ReceiptDecision, ReceiptInspection } from "./types";
+import type {
+  KbankReceiptInspection,
+  ReceiptDecision,
+  ReceiptInspection,
+} from "./types";
 
 const MODEL = "@cf/meta/llama-3.2-11b-vision-instruct" as const;
 
@@ -99,6 +103,10 @@ export function hasSettlementText(text: string): boolean {
   return /\bSETTLEMENT\b/.test(normalizeOcrText(text));
 }
 
+export function hasKbankBrandText(text: string): boolean {
+  return /\bK\s*BANK\b/.test(normalizeOcrText(text));
+}
+
 export function acceptWorkerPaymentName(
   inspection: ReceiptInspection,
   sourceText: string,
@@ -120,6 +128,50 @@ function amountsFromText(normalized: string): number[] {
     .map((match) => Number(match[1]))
     .filter(Number.isFinite);
   return [...new Set(values)];
+}
+
+function monetaryAmountsFromText(normalized: string): number[] {
+  const patterns = [
+    /\bTHB\s*(-?\d+[.]\d{2})\b/g,
+    /\b(-?\d+[.]\d{2})\s*THB\b/g,
+    /\b(?:AMT|AMOUNT|TOTAL)\s*:?\s*(?:THB\s*)?(-?\d+[.]\d{2})\b/g,
+  ];
+  const values = patterns
+    .flatMap((pattern) => [...normalized.matchAll(pattern)])
+    .map((match) => Number(match[1]))
+    .filter(Number.isFinite);
+  return [...new Set(values)];
+}
+
+export function inspectKbankReceiptText(text: string): KbankReceiptInspection {
+  const normalized = normalizeOcrText(text);
+  const hasKbankBrand = hasKbankBrandText(normalized);
+  const hasKplusBrand = isKplusCandidateText(normalized);
+  const hasSettlement = hasSettlementText(normalized);
+  const observedAmounts = monetaryAmountsFromText(normalized);
+  const isKbankReceipt = hasKbankBrand && !hasKplusBrand;
+
+  return {
+    isKbankReceipt,
+    hasSettlement,
+    observedAmounts,
+    reason: `kbankBrand=${hasKbankBrand}; kplusBrand=${hasKplusBrand}; settlement=${hasSettlement}; amounts=${observedAmounts.join(",") || "none"}`,
+  };
+}
+
+export function isValidKbankReceipt(
+  inspection: KbankReceiptInspection,
+): boolean {
+  return (
+    inspection.isKbankReceipt &&
+    inspection.hasSettlement &&
+    inspection.observedAmounts.length > 0
+  );
+}
+
+export function hasKbankCandidateTextEvidence(text: string): boolean {
+  const normalized = normalizeOcrText(text);
+  return hasKbankBrandText(normalized) && !isKplusCandidateText(normalized);
 }
 
 export function inspectReceiptText(text: string): ReceiptInspection {
@@ -208,7 +260,18 @@ export function decideReceipt(
 export function shouldReplyAfterGoogleVision(
   inspection: ReceiptInspection,
 ): boolean {
-  return inspection.isKplusReceipt;
+  return inspection.isKplusReceipt && inspection.hasSettlement;
+}
+
+export function formatCompletedRound(
+  kplusAmount: number,
+  kbankAmount: number,
+): string {
+  return [
+    "✅ ผ่านรอบ: พบสลิปครบ 2 ใบ",
+    `KPLUS/K+ + SETTLEMENT: ${kplusAmount.toFixed(2)} บาท`,
+    `KBANK + SETTLEMENT: ${kbankAmount.toFixed(2)} บาท`,
+  ].join("\n");
 }
 
 export function formatDecision(

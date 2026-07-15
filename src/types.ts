@@ -43,6 +43,13 @@ export interface ReceiptInspection {
   reason: string;
 }
 
+export interface KbankReceiptInspection {
+  isKbankReceipt: boolean;
+  hasSettlement: boolean;
+  observedAmounts: number[];
+  reason: string;
+}
+
 export interface ReceiptDecision {
   status: "pass" | "fail" | "uncertain";
   failures: string[];
