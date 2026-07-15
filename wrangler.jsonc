@@ -21,6 +21,20 @@
       "database_id": "b10b2051-82ec-451d-993d-cb6035f6a24b"
     }
   ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "RECEIPT_ROUNDS",
+        "class_name": "ReceiptRoundCoordinator"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["ReceiptRoundCoordinator"]
+    }
+  ],
   "queues": {
     "producers": [
       {
@@ -34,7 +48,7 @@
         "max_batch_size": 1,
         "max_batch_timeout": 1,
         "max_retries": 3,
-        "max_concurrency": 1
+        "max_concurrency": 2
       }
     ]
   },

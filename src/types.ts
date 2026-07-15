@@ -17,6 +17,7 @@ export interface LineWebhookEvent {
   message?: {
     id?: string;
     type?: string;
+    text?: string;
     quoteToken?: string;
     contentProvider?: {
       type?: "line" | "external";
@@ -41,6 +42,7 @@ export interface ImageJob {
   imageSetId?: string;
   imageSetIndex?: number;
   imageSetTotal?: number;
+  referenceCode?: string;
 }
 
 export interface RoundFinalizeJob {

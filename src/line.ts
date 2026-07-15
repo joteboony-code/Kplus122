@@ -68,6 +68,21 @@ export function imageJobFromEvent(event: LineWebhookEvent): ImageJob | null {
   };
 }
 
+export function referenceCodeFromEvent(event: LineWebhookEvent): string | null {
+  if (event.type !== "message" || event.message?.type !== "text") return null;
+  const match = event.message.text?.match(/^\s*(\d{8})\s*$/);
+  return match?.[1] ?? null;
+}
+
+export function conversationAndSenderFromEvent(
+  event: LineWebhookEvent,
+): { conversationId: string; senderId: string } | null {
+  const conversationId =
+    event.source?.groupId ?? event.source?.roomId ?? event.source?.userId;
+  const senderId = event.source?.userId ?? conversationId;
+  return conversationId && senderId ? { conversationId, senderId } : null;
+}
+
 async function downloadLineImageAtUrl(
   url: string,
   channelAccessToken: string,

@@ -3,6 +3,7 @@ import type { ImageJob, RoundFinalizeJob } from "./types";
 
 export const ROUND_INACTIVITY_SECONDS = 20;
 export const ROUND_STATE_TTL_SECONDS = 10 * 60;
+export const ROUND_COMPLETED_SUPPRESSION_SECONDS = 60;
 
 export type RoundEvidenceKind = "wrong-amount" | "uncertain";
 
@@ -30,7 +31,7 @@ export function receiptRoundKey(job: ImageJob): string | null {
   const conversationId = job.replyTarget;
   const senderId = job.senderUserId ?? job.replyTarget;
   if (!conversationId || !senderId) return null;
-  return `receipt-round:v1:${conversationId}:${senderId}`;
+  return `receipt-round:v2:${conversationId}:${senderId}:${job.referenceCode ?? "no-reference"}`;
 }
 
 function betterEvidence(
@@ -73,6 +74,12 @@ export async function recordRoundActivity(
   if (!roundKey) return null;
 
   const current = parseRoundState(await state.get(roundKey));
+  if (
+    current?.completedAt !== undefined &&
+    now - current.completedAt < ROUND_COMPLETED_SUPPRESSION_SECONDS * 1000
+  ) {
+    return null;
+  }
   const active = current && current.completedAt === undefined ? current : null;
   const processedMessageIds = active?.processedMessageIds.includes(job.messageId)
     ? active.processedMessageIds

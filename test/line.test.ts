@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  conversationAndSenderFromEvent,
   imageJobFromEvent,
+  referenceCodeFromEvent,
   sendInspectionPushResult,
   sendInspectionResult,
   verifyLineSignature,
@@ -64,6 +66,27 @@ describe("LINE webhook", () => {
       imageSetTotal: 10,
     });
     expect(imageJobFromEvent({ type: "message", message: { type: "text" } })).toBeNull();
+  });
+
+  it("accepts only an exact 8-digit job reference and scopes it by conversation and sender", () => {
+    const event = {
+      type: "message",
+      source: { type: "group" as const, groupId: "group-1", userId: "user-1" },
+      message: { type: "text", text: "  12345678  " },
+    };
+    expect(referenceCodeFromEvent(event)).toBe("12345678");
+    expect(conversationAndSenderFromEvent(event)).toEqual({
+      conversationId: "group-1",
+      senderId: "user-1",
+    });
+    expect(referenceCodeFromEvent({
+      ...event,
+      message: { type: "text", text: "งาน 12345678" },
+    })).toBeNull();
+    expect(referenceCodeFromEvent({
+      ...event,
+      message: { type: "text", text: "1234567" },
+    })).toBeNull();
   });
 
   it("mentions the image sender in a group reply", async () => {

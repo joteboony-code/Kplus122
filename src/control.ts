@@ -4,6 +4,11 @@ import {
   GOOGLE_VISION_FREE_MONTHLY_UNITS,
 } from "./google-vision-usage";
 import { getDailyStats, type DailyStats } from "./daily-stats";
+import {
+  clearInspectionLogs,
+  listInspectionLogs,
+  type InspectionLogRow,
+} from "./audit-log";
 
 const PROCESSING_ENABLED_KEY = "control:processing-enabled";
 const SESSION_COOKIE = "kplus_control_session";
@@ -165,6 +170,59 @@ interface ProviderStatus {
   googleVisionConfigured: boolean;
   googleVisionUsage: number;
   dailyStats: DailyStats;
+  logs: InspectionLogRow[];
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+function logCards(logs: InspectionLogRow[]): string {
+  if (logs.length === 0) {
+    return '<div class="log-empty">ยังไม่มี Log การตรวจรูป</div>';
+  }
+  return logs.map((log) => {
+    const time = new Date(log.created_at * 1000).toLocaleString("th-TH", {
+      timeZone: "Asia/Bangkok",
+      hour12: false,
+    });
+    const outcomeLabel = log.outcome === "pass"
+      ? "ผ่าน"
+      : log.outcome === "fail"
+        ? "ไม่ผ่าน"
+        : log.outcome === "error"
+          ? "ผิดพลาด"
+          : "ข้าม/เงียบ";
+    const amounts = log.observed_amounts
+      ? escapeHtml(log.observed_amounts.replaceAll(/[\[\]"]/g, ""))
+      : "-";
+    let timing = "";
+    if (log.provider_timings) {
+      try {
+        const parsed = JSON.parse(log.provider_timings) as Record<string, number>;
+        timing = Object.entries(parsed)
+          .map(([name, milliseconds]) => `${name} ${milliseconds}ms`)
+          .join(" · ");
+      } catch {
+        timing = log.provider_timings;
+      }
+    }
+    return `<article class="log-card ${escapeHtml(log.outcome)}">
+      <div class="log-head"><b>${outcomeLabel}</b><time>${escapeHtml(time)}</time></div>
+      <div class="log-grid">
+        <span><small>เลขงาน</small>${escapeHtml(log.reference_code ?? "ไม่ระบุ")}</span>
+        <span><small>เส้นทางตรวจ</small>${escapeHtml(log.provider_chain ?? "ไม่เรียก OCR")}</span>
+        <span><small>ยอดที่อ่านได้</small>${amounts}</span>
+        <span><small>เวลา</small>${log.processing_ms}ms${log.queue_delay_ms === null ? "" : ` · รอคิว ${log.queue_delay_ms}ms`}</span>
+      </div>
+      <div class="log-detail">ขั้นตอน: ${escapeHtml(log.stage ?? "-")} · KPLUS: ${log.has_kplus === null ? "-" : log.has_kplus ? "พบ" : "ไม่พบ"} · SETTLEMENT: ${log.has_settlement === null ? "-" : log.has_settlement ? "พบ" : "ไม่พบ"}${timing ? ` · ${escapeHtml(timing)}` : ""}${log.error ? ` · ${escapeHtml(log.error)}` : ""}</div>
+    </article>`;
+  }).join("");
 }
 
 function controlPage(enabled: boolean, providers: ProviderStatus): string {
@@ -205,6 +263,7 @@ function controlPage(enabled: boolean, providers: ProviderStatus): string {
           : providers.googleVisionUsage >= 800
             ? `เริ่มเข้าเขตเตือน · คาดว่าเหลือ ${googleVisionRemaining} units`
             : `ตั้งค่าคีย์แล้ว · คาดว่าเหลือ ${googleVisionRemaining} units`;
+  const recentLogs = logCards(providers.logs);
   return `<!doctype html>
 <html lang="th">
 <head>
@@ -225,6 +284,7 @@ function controlPage(enabled: boolean, providers: ProviderStatus): string {
     .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}.stat{padding:13px;border:1px solid #294537;border-radius:13px;background:#0a1710}.stat small{display:block;color:#718d7e;font-size:11px}.stat strong{display:block;margin-top:5px;font-size:22px}.stat.wide{grid-column:span 2}.stat em{display:block;margin-top:5px;color:#8ca799;font-size:11px;font-style:normal;line-height:1.4}
     .meter{height:7px;margin-top:11px;border-radius:99px;background:#203429;overflow:hidden}.meter span{display:block;height:100%;width:${Math.min((providers.ocrSpaceUsage / OCR_SPACE_DAILY_LIMIT) * 100, 100)}%;background:${ocrSpaceRemaining > 0 ? "#30dc78" : "#f06474"}}
     .notice{margin-top:16px;padding:14px 16px;border-radius:13px;background:#172019;color:#91aa9c;font-size:13px;line-height:1.6;border:1px solid #293a30}
+    .logs{display:grid;gap:10px}.log-card,.log-empty{padding:14px;border:1px solid #294537;border-radius:14px;background:#0a1710}.log-card.pass{border-color:#28784c}.log-card.fail,.log-card.error{border-color:#743b45}.log-head{display:flex;justify-content:space-between;gap:12px}.log-head time{color:#789486;font-size:12px}.log-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-top:10px}.log-grid span{font-size:13px}.log-grid small{display:block;color:#718d7e;font-size:10px}.log-detail{margin-top:9px;color:#8ca799;font-size:11px;line-height:1.5;overflow-wrap:anywhere}.log-actions{display:flex;justify-content:space-between;align-items:center;margin:22px 0 10px}.log-actions .section-title{margin:0}.clear-logs button{border:1px solid #663b41;border-radius:9px;background:transparent;color:#ff9daa;padding:7px 10px;cursor:pointer}.log-empty{color:#789486;text-align:center}
     @media(max-width:650px){body{padding:15px}.shell{margin:12px auto}.panel{padding:25px}.pipeline,.meta{grid-template-columns:1fr}.stats{grid-template-columns:repeat(2,1fr)}.step:not(:last-child)::after{content:"↓";right:50%;top:auto;bottom:-18px;transform:translateX(50%)}.brand span{display:none}}
   </style>
 </head>
@@ -250,9 +310,23 @@ function controlPage(enabled: boolean, providers: ProviderStatus): string {
     <div class="item"><small>OCR.space วันนี้</small><b class="${providers.ocrSpaceConfigured ? "ok" : "warn"}">${providers.ocrSpaceUsage} / ${OCR_SPACE_DAILY_LIMIT} รูป</b><div class="meter"><span></span></div><em>${ocrSpaceState}</em></div>
     <div class="item"><small>Workers AI</small><b class="${enabled ? "ok" : ""}">${enabled ? "พร้อมเป็นระบบสำรอง" : "ไม่ถูกเรียกใช้งาน"}</b><em>ระบบไม่สามารถอ่านโควตาคงเหลือจาก binding ได้</em></div>
     <div class="item"><small>Google Vision เดือนนี้ (ประมาณการ)</small><b class="${googleVisionTone}">${providers.googleVisionUsage} / ${GOOGLE_VISION_FREE_MONTHLY_UNITS} units</b><div class="meter"><span style="width:${Math.min((providers.googleVisionUsage / GOOGLE_VISION_FREE_MONTHLY_UNITS) * 100, 100)}%;background:${googleVisionTone === "danger" ? "#f06474" : googleVisionTone === "warn" ? "#ffd477" : "#30dc78"}"></span></div><em>${googleVisionState}</em></div>
-    <div class="item"><small>คิวและกฎปัจจุบัน</small><b>1 ชุดรูป LINE (imageSet) = 1 รอบ · ตรวจเฉพาะสลิป KPLUS</b><em>KPLUS/K+/Thai QR Payment + SETTLEMENT + ยอด 1.22 หรือ -1.22 · ตอบผ่านครั้งเดียวต่อชุดรูป</em></div>
+    <div class="item"><small>คิวและกฎปัจจุบัน</small><b>ตรวจพร้อมกันสูงสุด 2 รูป · รวมผลตามกลุ่มและผู้ส่ง</b><em>รับเลขงาน 8 หลักก่อนรูป · KPLUS/K+/Thai QR Payment + SETTLEMENT + ยอด 1.22 หรือ -1.22</em></div>
   </div>
-  <div class="notice">OCR.space นับตามวันที่ประเทศไทย ส่วน Google Vision เป็นค่าประมาณรายเดือนที่นับเฉพาะคำขอสำเร็จจาก Worker นี้ตั้งแต่เริ่มใช้ตัวนับ ไม่รวมระบบอื่นใน Google Cloud Project การเปลี่ยนสถานะอาจใช้เวลาสั้น ๆ ก่อนมีผลครบทุกศูนย์ข้อมูล</div></section></main></body></html>`;
+  <div class="notice">OCR.space นับตามวันที่ประเทศไทย ส่วน Google Vision เป็นค่าประมาณรายเดือนที่นับเฉพาะคำขอสำเร็จจาก Worker นี้ตั้งแต่เริ่มใช้ตัวนับ ไม่รวมระบบอื่นใน Google Cloud Project การเปลี่ยนสถานะอาจใช้เวลาสั้น ๆ ก่อนมีผลครบทุกศูนย์ข้อมูล</div>
+  <div class="log-actions"><div class="section-title">Log การตรวจล่าสุด 50 รูป</div><form class="clear-logs" method="post" action="/control/logs/clear"><button type="submit">ล้าง Log</button></form></div>
+  <div class="logs">${recentLogs}</div></section></main></body></html>`;
+}
+
+async function safeInspectionLogs(db: D1Database): Promise<InspectionLogRow[]> {
+  try {
+    return await listInspectionLogs(db);
+  } catch (error) {
+    console.warn(JSON.stringify({
+      event: "inspection_logs_load_failed",
+      error: error instanceof Error ? error.message : "unknown error",
+    }));
+    return [];
+  }
 }
 
 export async function handleControlRequest(
@@ -288,7 +362,7 @@ export async function handleControlRequest(
   if (!authenticated) return htmlResponse(loginPage());
 
   if (request.method === "GET" && (url.pathname === "/control" || url.pathname === "/control/")) {
-    const [enabled, ocrSpaceUsage, googleVisionUsage, dailyStats] = await Promise.all([
+    const [enabled, ocrSpaceUsage, googleVisionUsage, dailyStats, logs] = await Promise.all([
       isProcessingEnabled(
         env.CONTROL_DB,
         String(env.PROCESSING_FORCE_DISABLED) === "true",
@@ -296,6 +370,7 @@ export async function handleControlRequest(
       getOcrSpaceUsage(env.REPLY_STATE),
       getGoogleVisionUsage(env.REPLY_STATE),
       getDailyStats(env.REPLY_STATE),
+      safeInspectionLogs(env.CONTROL_DB),
     ]);
     return htmlResponse(controlPage(enabled, {
       ocrSpaceConfigured: Boolean(env.OCR_SPACE_API_KEY),
@@ -303,7 +378,15 @@ export async function handleControlRequest(
       googleVisionConfigured: Boolean(env.GOOGLE_VISION_API_KEY),
       googleVisionUsage,
       dailyStats,
+      logs,
     }));
+  }
+
+  if (request.method === "POST" && url.pathname === "/control/logs/clear") {
+    if (!sameOrigin(request)) return htmlResponse("Forbidden", 403);
+    await clearInspectionLogs(env.CONTROL_DB);
+    console.log(JSON.stringify({ event: "inspection_logs_cleared" }));
+    return redirectToControl();
   }
 
   if (request.method === "POST" && url.pathname === "/control/toggle") {

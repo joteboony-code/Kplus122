@@ -11,7 +11,7 @@ export function recentPassKey(job: ImageJob): string | null {
   const conversationId = job.replyTarget;
   const senderId = job.senderUserId ?? job.replyTarget;
   if (!conversationId || !senderId) return null;
-  return `recent-pass:v3:${conversationId}:${senderId}`;
+  return `recent-pass:v4:${conversationId}:${senderId}:${job.referenceCode ?? "no-reference"}`;
 }
 
 export async function hasRecentPass(

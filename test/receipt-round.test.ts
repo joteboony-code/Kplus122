@@ -41,6 +41,11 @@ describe("receipt round state", () => {
     expect(receiptRoundKey(job("two", "U2"))).not.toBe(receiptRoundKey(job("one")));
   });
 
+  it("separates rounds when the technician sends a new 8-digit job reference", () => {
+    expect(receiptRoundKey({ ...job("one"), referenceCode: "12345678" }))
+      .not.toBe(receiptRoundKey({ ...job("two"), referenceCode: "87654321" }));
+  });
+
   it("resets the inactivity timer when another image is processed", async () => {
     const state = memoryState();
     const first = await recordRoundActivity(
@@ -124,5 +129,17 @@ describe("receipt round state", () => {
     expect(
       await finalizeRound(finalizer!, state, ROUND_INACTIVITY_SECONDS * 1000),
     ).toEqual({ status: "stale" });
+  });
+
+  it("does not reopen a completed round when a concurrent failing image finishes later", async () => {
+    const state = memoryState();
+    await completeRoundAfterPass(job("pass"), state, 10_000);
+    expect(await recordRoundActivity(
+      job("late-fail"),
+      { kind: "wrong-amount", text: "wrong", job: job("late-fail") },
+      state,
+      12_000,
+      "late-generation",
+    )).toBeNull();
   });
 });

@@ -20,7 +20,7 @@ function job(overrides: Partial<ImageJob> = {}): ImageJob {
 
 describe("recent pass suppression", () => {
   it("scopes a pass to the conversation and sender", () => {
-    expect(recentPassKey(job())).toBe("recent-pass:v3:group-1:user-1");
+    expect(recentPassKey(job())).toBe("recent-pass:v4:group-1:user-1:no-reference");
     expect(recentPassKey(job({ senderUserId: "user-2" }))).not.toBe(
       recentPassKey(job()),
     );
@@ -38,9 +38,15 @@ describe("recent pass suppression", () => {
       replyTarget: "user-1",
       senderUserId: "user-1",
       sourceType: "user",
-    }))).toBe("recent-pass:v3:user-1:user-1");
+    }))).toBe("recent-pass:v4:user-1:user-1:no-reference");
     expect(RECENT_PASS_TTL_SECONDS).toBe(60);
     expect(recentPassTtl(job())).toBe(60);
+  });
+
+  it("does not suppress a new 8-digit job after the prior job passed", () => {
+    expect(recentPassKey(job({ referenceCode: "12345678" }))).not.toBe(
+      recentPassKey(job({ referenceCode: "87654321" })),
+    );
   });
 
   it("does not suppress when LINE omitted the conversation identity", () => {

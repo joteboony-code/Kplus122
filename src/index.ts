@@ -26,8 +26,15 @@ import {
 } from "./ocr-space-usage";
 import { handleControlRequest, isProcessingEnabled } from "./control";
 import {
+  recordInspectionLog,
+  type InspectionTrace,
+} from "./audit-log";
+import { getJobReference, storeJobReference } from "./job-reference";
+import {
+  conversationAndSenderFromEvent,
   downloadLineImage,
   imageJobFromEvent,
+  referenceCodeFromEvent,
   sendInspectionPushResult,
   sendInspectionResult,
   verifyLineSignature,
@@ -35,12 +42,11 @@ import {
 import { hasRecentPass, recordRecentPass } from "./reply-state";
 import { isImageProcessed, markImageProcessed } from "./processing-state";
 import {
-  completeRoundAfterPass,
-  finalizeRound,
-  recordRoundActivity,
+  receiptRoundKey,
   ROUND_INACTIVITY_SECONDS,
   type RoundEvidence,
 } from "./receipt-round";
+export { ReceiptRoundCoordinator } from "./receipt-round-coordinator";
 import { d1StateStore } from "./state-store";
 import {
   isRoundFinalizeJob,
@@ -58,6 +64,32 @@ interface ProcessResult {
 
 const IGNORED_RESULT: ProcessResult = { outcome: "ignored" };
 
+async function timedProvider<T>(
+  trace: InspectionTrace,
+  provider: string,
+  operation: () => Promise<T>,
+): Promise<T> {
+  const startedAt = Date.now();
+  trace.providers.push(provider);
+  try {
+    return await operation();
+  } finally {
+    trace.providerTimings[provider] =
+      (trace.providerTimings[provider] ?? 0) + Date.now() - startedAt;
+  }
+}
+
+function updateTraceFromInspection(
+  trace: InspectionTrace,
+  inspection: { isKplusReceipt: boolean; hasSettlement: boolean; observedAmounts: number[] },
+  stage: string,
+): void {
+  trace.stage = stage;
+  trace.hasKplus = inspection.isKplusReceipt;
+  trace.hasSettlement = inspection.hasSettlement;
+  trace.observedAmounts = inspection.observedAmounts;
+}
+
 async function recordStat(env: Env, name: DailyStatName): Promise<void> {
   try {
     await incrementDailyStat(env.REPLY_STATE, name);
@@ -66,6 +98,25 @@ async function recordStat(env: Env, name: DailyStatName): Promise<void> {
       event: "daily_stat_record_failed",
       stat: name,
       error: error instanceof Error ? error.message : "unknown error",
+    }));
+  }
+}
+
+async function recordAuditSafely(
+  env: Env,
+  job: ImageJob,
+  outcome: "pass" | "fail" | "ignored" | "error",
+  trace: InspectionTrace,
+  startedAt: number,
+  error?: string,
+): Promise<void> {
+  try {
+    await recordInspectionLog(env.CONTROL_DB, job, outcome, trace, startedAt, error);
+  } catch (auditError) {
+    console.error(JSON.stringify({
+      event: "inspection_log_failed",
+      messageId: job.messageId,
+      error: auditError instanceof Error ? auditError.message : "unknown error",
     }));
   }
 }
@@ -117,9 +168,37 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
     return new Response("Invalid JSON", { status: 400 });
   }
 
-  const jobs = (payload.events ?? [])
-    .map(imageJobFromEvent)
-    .filter((job): job is ImageJob => job !== null);
+  const operationalState = d1StateStore(env.CONTROL_DB);
+  const jobs: ImageJob[] = [];
+  for (const event of payload.events ?? []) {
+    const scope = conversationAndSenderFromEvent(event);
+    const referenceCode = referenceCodeFromEvent(event);
+    if (scope && referenceCode) {
+      await storeJobReference(
+        scope.conversationId,
+        scope.senderId,
+        referenceCode,
+        operationalState,
+      );
+      console.log(JSON.stringify({
+        event: "job_reference_recorded",
+        referenceCode,
+        sourceType: event.source?.type,
+      }));
+      continue;
+    }
+
+    const job = imageJobFromEvent(event);
+    if (!job) continue;
+    if (scope) {
+      job.referenceCode = await getJobReference(
+        scope.conversationId,
+        scope.senderId,
+        operationalState,
+      );
+    }
+    jobs.push(job);
+  }
 
   if (!(await isProcessingEnabled(
     env.CONTROL_DB,
@@ -140,12 +219,17 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
   return Response.json({ accepted: jobs.length });
 }
 
-async function processImageJob(job: ImageJob, env: Env): Promise<ProcessResult> {
+async function processImageJob(
+  job: ImageJob,
+  env: Env,
+  trace: InspectionTrace,
+): Promise<ProcessResult> {
   const expectedSale = numericSetting(env.EXPECTED_SALE_AMOUNT, "EXPECTED_SALE_AMOUNT");
   const expectedVoid = numericSetting(env.EXPECTED_VOID_AMOUNT, "EXPECTED_VOID_AMOUNT");
   const minConfidence = numericSetting(env.MIN_CONFIDENCE, "MIN_CONFIDENCE");
 
   if (await hasRecentPass(job, d1StateStore(env.CONTROL_DB))) {
+    trace.stage = "recent-pass-suppression";
     console.log(JSON.stringify({
       event: "image_ignored",
       webhookEventId: job.webhookEventId,
@@ -161,7 +245,11 @@ async function processImageJob(job: ImageJob, env: Env): Promise<ProcessResult> 
     let ocrSpaceResult: Awaited<ReturnType<typeof ocrSpaceOcr>> | null = null;
     try {
       await recordStat(env, "ocrSpaceCalls");
-      ocrSpaceResult = await ocrSpaceOcr(original, env.OCR_SPACE_API_KEY);
+      ocrSpaceResult = await timedProvider(
+        trace,
+        "ocr-space",
+        () => ocrSpaceOcr(original, env.OCR_SPACE_API_KEY!),
+      );
     } catch (error) {
       await recordStat(env, "ocrSpaceErrors");
       console.warn(JSON.stringify({
@@ -221,6 +309,7 @@ async function processImageJob(job: ImageJob, env: Env): Promise<ProcessResult> 
           expectedVoid,
           minConfidence,
         );
+        updateTraceFromInspection(trace, ocrSpaceInspection, "ocr-space");
         const ocrSpaceHasAnyAmount = ocrSpaceInspection.observedAmounts.length > 0;
         if (ocrSpaceDecision.status === "pass") {
           const matchedAmount = ocrSpaceInspection.observedAmounts.find(
@@ -277,6 +366,7 @@ async function processImageJob(job: ImageJob, env: Env): Promise<ProcessResult> 
         );
 
         if (!ocrSpaceCandidate) {
+          trace.stage = "ocr-space-filter";
           console.log(JSON.stringify({
             event: "image_ignored",
             webhookEventId: job.webhookEventId,
@@ -305,7 +395,11 @@ async function processImageJob(job: ImageJob, env: Env): Promise<ProcessResult> 
   let workerText: string;
   try {
     await recordStat(env, "workersAiCalls");
-    workerText = await transcribeVisibleText(env.AI, original);
+    workerText = await timedProvider(
+      trace,
+      "workers-ai",
+      () => transcribeVisibleText(env.AI, original),
+    );
   } catch (error) {
     await recordStat(env, "workersAiErrors");
     throw error;
@@ -328,6 +422,7 @@ async function processImageJob(job: ImageJob, env: Env): Promise<ProcessResult> 
     expectedVoid,
     minConfidence,
   );
+  updateTraceFromInspection(trace, acceptedWorkerInspection, "workers-ai");
 
   if (workerDecision.status === "pass") {
     const matchedAmount = acceptedWorkerInspection.observedAmounts.find(
@@ -354,7 +449,11 @@ async function processImageJob(job: ImageJob, env: Env): Promise<ProcessResult> 
   if (visualClassifierAttempted) {
     try {
       await recordStat(env, "workersAiCalls");
-      visualKplusCandidate = await classifyKplusVisualCandidate(env.AI, original);
+      visualKplusCandidate = await timedProvider(
+        trace,
+        "workers-ai-visual",
+        () => classifyKplusVisualCandidate(env.AI, original),
+      );
     } catch (error) {
       await recordStat(env, "workersAiErrors");
       throw error;
@@ -365,6 +464,7 @@ async function processImageJob(job: ImageJob, env: Env): Promise<ProcessResult> 
     visualKplusCandidate;
 
   if (!googleCandidate) {
+    trace.stage = "workers-ai-filter";
     console.log(JSON.stringify({
       event: "image_ignored",
       webhookEventId: job.webhookEventId,
@@ -397,7 +497,11 @@ async function processImageJob(job: ImageJob, env: Env): Promise<ProcessResult> 
   let receiptText: string;
   try {
     await recordStat(env, "googleVisionCalls");
-    receiptText = await googleVisionOcr(original, env.GOOGLE_VISION_API_KEY);
+    receiptText = await timedProvider(
+      trace,
+      "google-vision",
+      () => googleVisionOcr(original, env.GOOGLE_VISION_API_KEY!),
+    );
   } catch (error) {
     await recordStat(env, "googleVisionErrors");
     throw error;
@@ -419,6 +523,7 @@ async function processImageJob(job: ImageJob, env: Env): Promise<ProcessResult> 
     expectedVoid,
     minConfidence,
   );
+  updateTraceFromInspection(trace, inspection, "google-vision");
 
   if (!shouldReplyAfterGoogleVision(inspection)) {
     console.log(JSON.stringify({
@@ -512,7 +617,7 @@ async function processRoundFinalizer(
   job: RoundFinalizeJob,
   env: Env,
 ): Promise<void> {
-  const result = await finalizeRound(job, d1StateStore(env.CONTROL_DB));
+  const result = await env.RECEIPT_ROUNDS.getByName(job.roundKey).finalize(job);
   if (result.status === "waiting") {
     await env.IMAGE_QUEUE.send(job, {
       delaySeconds: result.retryAfterSeconds ?? ROUND_INACTIVITY_SECONDS,
@@ -558,25 +663,40 @@ export default {
 
   async queue(batch, env): Promise<void> {
     for (const message of batch.messages) {
-      try {
-        if (isRoundFinalizeJob(message.body)) {
+      if (isRoundFinalizeJob(message.body)) {
+        try {
           await processRoundFinalizer(message.body, env);
           message.ack();
-          continue;
+        } catch (error) {
+          console.error(JSON.stringify({
+            event: "receipt_round_finalizer_failed",
+            roundKey: message.body.roundKey,
+            attempts: message.attempts,
+            error: error instanceof Error ? error.message : "unknown error",
+          }));
+          message.retry({ delaySeconds: 30 });
         }
+        continue;
+      }
 
+      const job = message.body;
+      const startedAt = Date.now();
+      const trace: InspectionTrace = { providers: [], providerTimings: {} };
+      try {
         if (message.attempts === 1) await recordStat(env, "received");
 
         const operationalState = d1StateStore(env.CONTROL_DB);
-        if (await isImageProcessed(message.body, operationalState)) {
+        if (await isImageProcessed(job, operationalState)) {
           await recordStat(env, "duplicates");
           await recordStat(env, "ignored");
+          trace.stage = "duplicate-suppression";
           console.log(JSON.stringify({
             event: "image_ignored",
-            webhookEventId: message.body.webhookEventId,
-            messageId: message.body.messageId,
+            webhookEventId: job.webhookEventId,
+            messageId: job.messageId,
             stage: "duplicate-suppression",
           }));
+          await recordAuditSafely(env, job, "ignored", trace, startedAt);
           message.ack();
           continue;
         }
@@ -585,34 +705,41 @@ export default {
           env.CONTROL_DB,
           String(env.PROCESSING_FORCE_DISABLED) === "true",
         ))) {
+          trace.stage = "processing-disabled";
           console.log(JSON.stringify({
             event: "image_ignored",
-            messageId: message.id,
+            messageId: job.messageId,
             stage: "processing-disabled",
           }));
-          await markImageProcessed(message.body, operationalState);
+          await markImageProcessed(job, operationalState);
           await recordStat(env, "processed");
           await recordStat(env, "ignored");
+          await recordAuditSafely(env, job, "ignored", trace, startedAt);
           message.ack();
           continue;
         }
 
-        const result = await processImageJob(message.body, env);
+        const result = await processImageJob(job, env, trace);
+        const roundKey = receiptRoundKey(job);
         if (result.outcome === "pass") {
-          await completeRoundAfterPass(message.body, operationalState);
+          if (roundKey) {
+            await env.RECEIPT_ROUNDS.getByName(roundKey).completeAfterPass(job);
+          }
         } else {
-          const finalizer = await recordRoundActivity(
-            message.body,
-            result.evidence ? { ...result.evidence, job: message.body } : undefined,
-            operationalState,
-          );
+          const finalizer = roundKey
+            ? await env.RECEIPT_ROUNDS.getByName(roundKey).recordActivity(
+                job,
+                result.evidence ? { ...result.evidence, job } : undefined,
+                crypto.randomUUID(),
+              )
+            : null;
           if (finalizer) {
             await env.IMAGE_QUEUE.send(finalizer, {
               delaySeconds: ROUND_INACTIVITY_SECONDS,
             });
-          } else if (result.evidence) {
+          } else if (!roundKey && result.evidence) {
             await sendInspectionResult(
-              message.body,
+              job,
               result.evidence.text,
               env.LINE_CHANNEL_ACCESS_TOKEN,
               String(env.ENABLE_PUSH_FALLBACK) === "true",
@@ -620,12 +747,12 @@ export default {
           }
         }
         try {
-          await markImageProcessed(message.body, operationalState);
+          await markImageProcessed(job, operationalState);
         } catch (error) {
           console.error(JSON.stringify({
             event: "processed_image_marker_failed",
-            webhookEventId: message.body.webhookEventId,
-            messageId: message.body.messageId,
+            webhookEventId: job.webhookEventId,
+            messageId: job.messageId,
             error: error instanceof Error ? error.message : "unknown error",
           }));
         }
@@ -638,12 +765,22 @@ export default {
               ? "failed"
               : "ignored",
         );
+        await recordAuditSafely(env, job, result.outcome, trace, startedAt);
         message.ack();
       } catch (error) {
         await recordStat(env, "errors");
+        trace.stage ??= "processing-error";
+        await recordAuditSafely(
+          env,
+          job,
+          "error",
+          trace,
+          startedAt,
+          error instanceof Error ? error.message : "unknown error",
+        );
         console.error(JSON.stringify({
           event: "image_processing_failed",
-          messageId: message.id,
+          messageId: job.messageId,
           attempts: message.attempts,
           error: error instanceof Error ? error.message : "unknown error",
         }));
