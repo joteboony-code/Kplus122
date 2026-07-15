@@ -1,6 +1,7 @@
 import type { ImageJob } from "./types";
 
 export const RECEIPT_ROUND_SECONDS = 5 * 60;
+export const IMAGE_SET_RETENTION_SECONDS = 60 * 60;
 
 export type ReceiptKind = "kplus" | "kbank";
 
@@ -27,16 +28,27 @@ export interface ReceiptRoundResult {
 function roundKey(job: ImageJob): string {
   const conversation = job.replyTarget ?? `${job.sourceType ?? "unknown"}:unknown`;
   const sender = job.senderUserId ?? job.replyTarget ?? "unknown";
-  return `receipt-round:v1:${conversation}:${sender}`;
+  if (job.imageSetId) {
+    return `receipt-round:v2:image-set:${conversation}:${sender}:${job.imageSetId}`;
+  }
+  return `receipt-round:v2:fallback:${conversation}:${sender}`;
 }
 
-function parseState(value: string | null, now: number): ReceiptRoundState {
+function retentionSeconds(job: ImageJob): number {
+  return job.imageSetId ? IMAGE_SET_RETENTION_SECONDS : RECEIPT_ROUND_SECONDS;
+}
+
+function parseState(
+  value: string | null,
+  now: number,
+  retention: number,
+): ReceiptRoundState {
   if (!value) return { updatedAt: now };
   try {
     const state = JSON.parse(value) as ReceiptRoundState;
     if (
       typeof state.updatedAt !== "number" ||
-      now - state.updatedAt > RECEIPT_ROUND_SECONDS * 1000
+      now - state.updatedAt > retention * 1000
     ) {
       return { updatedAt: now };
     }
@@ -54,7 +66,8 @@ export async function recordReceiptEvidence(
   now = Date.now(),
 ): Promise<ReceiptRoundResult> {
   const key = roundKey(job);
-  const state = parseState(await kv.get(key), now);
+  const retention = retentionSeconds(job);
+  const state = parseState(await kv.get(key), now, retention);
   state.updatedAt = now;
   state[kind] = { messageId: job.messageId, amount, detectedAt: now };
 
@@ -68,7 +81,7 @@ export async function recordReceiptEvidence(
     await kv.delete(key);
   } else {
     await kv.put(key, JSON.stringify(state), {
-      expirationTtl: RECEIPT_ROUND_SECONDS,
+      expirationTtl: retention,
     });
   }
 

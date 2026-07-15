@@ -43,6 +43,7 @@ describe("LINE webhook", () => {
         type: "image",
         quoteToken: "image-quote-token",
         contentProvider: { type: "line" },
+        imageSet: { id: "set-10-images", index: 3, total: 10 },
       },
     });
 
@@ -53,6 +54,9 @@ describe("LINE webhook", () => {
       replyTarget: "group-1",
       sourceType: "group",
       senderUserId: "user-1",
+      imageSetId: "set-10-images",
+      imageSetIndex: 3,
+      imageSetTotal: 10,
     });
     expect(imageJobFromEvent({ type: "message", message: { type: "text" } })).toBeNull();
   });

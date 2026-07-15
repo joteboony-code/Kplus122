@@ -14,7 +14,12 @@ function memoryKv(): KVNamespace {
   } as KVNamespace;
 }
 
-function job(messageId: string, sender = "U1", group = "G1"): ImageJob {
+function job(
+  messageId: string,
+  sender = "U1",
+  group = "G1",
+  imageSetId?: string,
+): ImageJob {
   return {
     webhookEventId: `event-${messageId}`,
     messageId,
@@ -22,6 +27,7 @@ function job(messageId: string, sender = "U1", group = "G1"): ImageJob {
     replyTarget: group,
     sourceType: "group",
     senderUserId: sender,
+    imageSetId,
   };
 }
 
@@ -49,6 +55,46 @@ describe("receipt round state", () => {
     expect(result.complete).toBe(false);
     expect(result.hasKplus).toBe(false);
     expect(result.hasKbank).toBe(true);
+  });
+
+  it("uses the LINE imageSet id as the exact round for a 10+ image album", async () => {
+    const kv = memoryKv();
+    await recordReceiptEvidence(
+      kv,
+      job("kplus", "U1", "G1", "album-A"),
+      "kplus",
+      1.22,
+      1_000,
+    );
+    const result = await recordReceiptEvidence(
+      kv,
+      job("kbank", "U1", "G1", "album-A"),
+      "kbank",
+      54.88,
+      1_000 + RECEIPT_ROUND_SECONDS * 1_000 + 1,
+    );
+
+    expect(result.complete).toBe(true);
+  });
+
+  it("does not combine two LINE albums from the same sender", async () => {
+    const kv = memoryKv();
+    await recordReceiptEvidence(
+      kv,
+      job("kplus", "U1", "G1", "album-A"),
+      "kplus",
+      1.22,
+      1_000,
+    );
+    const result = await recordReceiptEvidence(
+      kv,
+      job("kbank", "U1", "G1", "album-B"),
+      "kbank",
+      54.88,
+      2_000,
+    );
+
+    expect(result).toMatchObject({ complete: false, hasKplus: false, hasKbank: true });
   });
 
   it("does not count one image as both receipt types", async () => {

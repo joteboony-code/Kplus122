@@ -13,22 +13,56 @@ function memoryKv(): KVNamespace {
   } as KVNamespace;
 }
 
+function memoryControlDb(): D1Database {
+  const values = new Map<string, string>();
+  return {
+    prepare: (sql: string) => {
+      let parameters: unknown[] = [];
+      const statement = {
+        bind: (...valuesToBind: unknown[]) => {
+          parameters = valuesToBind;
+          return statement;
+        },
+        first: async () => {
+          const value = values.get(String(parameters[0]));
+          return value === undefined ? null : { value };
+        },
+        run: async () => {
+          if (sql.includes("INSERT INTO control_state")) {
+            values.set(String(parameters[0]), String(parameters[1]));
+          }
+          return { success: true };
+        },
+      } as unknown as D1PreparedStatement;
+      return statement;
+    },
+  } as D1Database;
+}
+
 describe("processing control", () => {
   it("defaults to enabled so existing deployments keep working", async () => {
-    expect(await isProcessingEnabled(memoryKv())).toBe(true);
+    expect(await isProcessingEnabled(memoryControlDb())).toBe(true);
+  });
+
+  it("honors the emergency stop without writing KV", async () => {
+    expect(await isProcessingEnabled(memoryControlDb(), true)).toBe(false);
   });
 
   it("persists disabled and enabled states", async () => {
-    const kv = memoryKv();
-    await setProcessingEnabled(kv, false);
-    expect(await isProcessingEnabled(kv)).toBe(false);
-    await setProcessingEnabled(kv, true);
-    expect(await isProcessingEnabled(kv)).toBe(true);
+    const db = memoryControlDb();
+    await setProcessingEnabled(db, false);
+    expect(await isProcessingEnabled(db)).toBe(false);
+    await setProcessingEnabled(db, true);
+    expect(await isProcessingEnabled(db)).toBe(true);
   });
 
   it("requires the configured password and creates an authenticated session", async () => {
     const kv = memoryKv();
-    const env = { CONTROL_PASSWORD: "strong-test-password", REPLY_STATE: kv };
+    const env = {
+      CONTROL_PASSWORD: "strong-test-password",
+      CONTROL_DB: memoryControlDb(),
+      REPLY_STATE: kv,
+    };
 
     const anonymous = await handleControlRequest(
       new Request("https://example.com/control"),
@@ -80,7 +114,8 @@ describe("processing control", () => {
     expect(page).toContain("Google Vision");
     expect(page).toContain("SETTLEMENT");
     expect(page).toContain("KBANK");
-    expect(page).toContain("ภายใน 5 นาที");
+    expect(page).toContain("imageSet");
+    expect(page).toContain("fallback 5 นาที");
     expect(page).toContain("0 / 1000 units");
     expect(page).toContain("สถิติวันนี้");
     expect(page).toContain("รูปซ้ำที่กันไว้");
@@ -89,7 +124,12 @@ describe("processing control", () => {
 
   it("lets an authenticated operator disable processing", async () => {
     const kv = memoryKv();
-    const env = { CONTROL_PASSWORD: "strong-test-password", REPLY_STATE: kv };
+    const controlDb = memoryControlDb();
+    const env = {
+      CONTROL_PASSWORD: "strong-test-password",
+      CONTROL_DB: controlDb,
+      REPLY_STATE: kv,
+    };
     const login = await handleControlRequest(
       new Request("https://example.com/control/login", {
         method: "POST",
@@ -116,12 +156,13 @@ describe("processing control", () => {
       env,
     );
     expect(toggle?.status).toBe(303);
-    expect(await isProcessingEnabled(kv)).toBe(false);
+    expect(await isProcessingEnabled(controlDb)).toBe(false);
   });
 
   it("accepts a browser same-origin form when Origin is serialized as null", async () => {
     const env = {
       CONTROL_PASSWORD: "strong-test-password",
+      CONTROL_DB: memoryControlDb(),
       REPLY_STATE: memoryKv(),
     };
     const login = await handleControlRequest(

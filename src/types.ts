@@ -21,6 +21,11 @@ export interface LineWebhookEvent {
     contentProvider?: {
       type?: "line" | "external";
     };
+    imageSet?: {
+      id?: string;
+      index?: number;
+      total?: number;
+    };
   };
 }
 
@@ -33,6 +38,9 @@ export interface ImageJob {
   sourceType?: "user" | "group" | "room";
   senderUserId?: string;
   timestamp?: number;
+  imageSetId?: string;
+  imageSetIndex?: number;
+  imageSetTotal?: number;
 }
 
 export interface ReceiptInspection {

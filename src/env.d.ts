@@ -4,4 +4,6 @@ interface Env {
   GOOGLE_VISION_API_KEY?: string;
   OCR_SPACE_API_KEY?: string;
   CONTROL_PASSWORD: string;
+  CONTROL_DB: D1Database;
+  PROCESSING_FORCE_DISABLED?: string;
 }

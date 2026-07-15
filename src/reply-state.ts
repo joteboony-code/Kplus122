@@ -6,7 +6,8 @@ export function recentPassKey(job: ImageJob): string | null {
   const conversationId = job.replyTarget;
   const senderId = job.senderUserId ?? job.replyTarget;
   if (!conversationId || !senderId) return null;
-  return `recent-pass:${conversationId}:${senderId}`;
+  const round = job.imageSetId ? `image-set:${job.imageSetId}` : "fallback";
+  return `recent-pass:v2:${conversationId}:${senderId}:${round}`;
 }
 
 export async function hasRecentPass(

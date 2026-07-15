@@ -62,6 +62,9 @@ export function imageJobFromEvent(event: LineWebhookEvent): ImageJob | null {
     sourceType: event.source?.type,
     senderUserId: event.source?.userId,
     timestamp: event.timestamp,
+    imageSetId: event.message.imageSet?.id,
+    imageSetIndex: event.message.imageSet?.index,
+    imageSetTotal: event.message.imageSet?.total,
   };
 }
 

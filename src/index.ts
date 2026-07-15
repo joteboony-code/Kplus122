@@ -86,6 +86,9 @@ async function recordRoundCandidate(
       webhookEventId: job.webhookEventId,
       provider,
       recordedKind: kind,
+      imageSetId: job.imageSetId,
+      imageSetIndex: job.imageSetIndex,
+      imageSetTotal: job.imageSetTotal,
       hasKplus: round.hasKplus,
       hasKbank: round.hasKbank,
     }));
@@ -104,6 +107,8 @@ async function recordRoundCandidate(
     event: "receipt_round_completed",
     webhookEventId: job.webhookEventId,
     provider,
+    imageSetId: job.imageSetId,
+    imageSetTotal: job.imageSetTotal,
     kplusAmount: round.kplusAmount,
     kbankAmount: round.kbankAmount,
   }));
@@ -130,7 +135,10 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
     .map(imageJobFromEvent)
     .filter((job): job is ImageJob => job !== null);
 
-  if (!(await isProcessingEnabled(env.REPLY_STATE))) {
+  if (!(await isProcessingEnabled(
+    env.CONTROL_DB,
+    String(env.PROCESSING_FORCE_DISABLED) === "true",
+  ))) {
     console.log(JSON.stringify({
       event: "webhook_images_skipped",
       reason: "processing-disabled",
@@ -550,7 +558,10 @@ export default {
           continue;
         }
 
-        if (!(await isProcessingEnabled(env.REPLY_STATE))) {
+        if (!(await isProcessingEnabled(
+          env.CONTROL_DB,
+          String(env.PROCESSING_FORCE_DISABLED) === "true",
+        ))) {
           console.log(JSON.stringify({
             event: "image_ignored",
             messageId: message.id,
