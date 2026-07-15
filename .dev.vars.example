@@ -1,0 +1,6 @@
+LINE_CHANNEL_SECRET=replace-with-channel-secret
+LINE_CHANNEL_ACCESS_TOKEN=replace-with-channel-access-token
+CONTROL_PASSWORD=replace-with-a-strong-control-page-password
+OCR_SPACE_API_KEY=replace-with-ocr-space-api-key
+# Optional final fallback for candidate KPLUS receipts.
+GOOGLE_VISION_API_KEY=replace-with-restricted-google-vision-api-key

@@ -1,0 +1,176 @@
+import { describe, expect, it } from "vitest";
+import {
+  acceptWorkerPaymentName,
+  VISIBLE_TEXT_PROMPT,
+  decideReceipt,
+  formatDecision,
+  hasExpectedAmount,
+  hasGoogleCandidateTextEvidence,
+  hasThaiQrPaymentText,
+  inspectConfirmedReceiptText,
+  inspectReceiptText,
+  isConfirmedKplusReceiptText,
+  isKplusCandidateText,
+  parseKplusVisualCandidate,
+  shouldReplyAfterGoogleVision,
+} from "../src/analyze";
+
+describe("receipt decision", () => {
+  it("keeps target values out of the AI prompt", () => {
+    expect(VISIBLE_TEXT_PROMPT).not.toMatch(/KPLUS|1[.]22|VOID|SETTLEMENT/i);
+  });
+
+  it("ignores an equipment label that only says KBank", () => {
+    const equipmentText = "KBank Cash\nTID 28254061\nK-BIZ Contact Center";
+    expect(isKplusCandidateText(equipmentText)).toBe(false);
+  });
+
+  it("does not confuse the bot name Kplus122 with a KPLUS receipt", () => {
+    expect(isKplusCandidateText("Kplus122 replied at 17:50\n1.22")).toBe(false);
+  });
+
+  it("parses the targeted visual classifier without accepting a negative", () => {
+    expect(parseKplusVisualCandidate("CANDIDATE")).toBe(true);
+    expect(parseKplusVisualCandidate("NOT_CANDIDATE")).toBe(false);
+    expect(parseKplusVisualCandidate("This is not candidate.")).toBe(false);
+  });
+
+  it("does not send arbitrary decimal numbers to Google without receipt evidence", () => {
+    const inspection = inspectReceiptText("34.73 50.00 8.88");
+
+    expect(inspection.observedAmounts).toEqual([34.73, 50, 8.88]);
+    expect(hasGoogleCandidateTextEvidence(inspection, 1.22, -1.22)).toBe(false);
+  });
+
+  it("keeps an expected amount as partial Google evidence", () => {
+    const inspection = inspectReceiptText("AMOUNT 1.22");
+
+    expect(hasGoogleCandidateTextEvidence(inspection, 1.22, -1.22)).toBe(true);
+  });
+
+  it.each([
+    "THAIQR",
+    "Thai QR Payment",
+    "THAIQR PAYMENT",
+    "ThaiQRPayment",
+    "QR PAYMENT",
+    "QRPayment",
+  ])("uses %s as partial Google evidence", (text) => {
+    const inspection = inspectReceiptText(text);
+
+    expect(hasThaiQrPaymentText(text)).toBe(true);
+    expect(hasGoogleCandidateTextEvidence(inspection, 1.22, -1.22, text)).toBe(true);
+  });
+
+  it("does not treat an unrelated QR label as Thai QR Payment", () => {
+    expect(hasThaiQrPaymentText("QR CODE FOR SERVICE FORM")).toBe(false);
+  });
+
+  it.each([
+    "THAIQR",
+    "Thai QR Payment",
+    "QR PAYMENT",
+  ])("passes directly from Workers AI when %s and the expected amount are readable", (name) => {
+    const inspection = inspectReceiptText(`${name}\nAMOUNT 1.22`);
+    const accepted = acceptWorkerPaymentName(inspection, `${name}\nAMOUNT 1.22`);
+
+    expect(decideReceipt(accepted, 1.22, -1.22, 0.65).status).toBe("pass");
+  });
+
+  it("does not direct-pass a payment name without the expected amount", () => {
+    const text = "Thai QR Payment\nAMOUNT 8.00";
+    const accepted = acceptWorkerPaymentName(inspectReceiptText(text), text);
+
+    expect(decideReceipt(accepted, 1.22, -1.22, 0.65).status).toBe("fail");
+  });
+
+  it("does not use generic receipt structure as Google evidence", () => {
+    const inspection = inspectReceiptText(
+      "KBank CREDIT CARD\nSALE\nVOID\nTHB 80.00\nSETTLEMENT",
+    );
+
+    expect(hasGoogleCandidateTextEvidence(inspection, 1.22, -1.22)).toBe(false);
+  });
+
+  it("does not confirm KPLUS when it only appears in a service-form table", () => {
+    const text = [
+      "CASTLES TECHNOLOGY",
+      "JOB TYPE: SERVICE",
+      "ACQUIRER TERMINAL ID MERCHANT ID FUNCTION",
+      "KBANK 62314012 401015477563001",
+      "KPLUS 62314012 401015477563001",
+      "APPLICATION: CA_321_GENERIC 1.28 8444",
+    ].join("\n");
+
+    expect(isConfirmedKplusReceiptText(text)).toBe(false);
+    expect(inspectConfirmedReceiptText(text).isKplusReceipt).toBe(false);
+  });
+
+  it("confirms KPLUS only in KPLUS payment context", () => {
+    expect(isConfirmedKplusReceiptText("CHANNEL: KPLUS\nAMT: THB 1.22")).toBe(true);
+    expect(isConfirmedKplusReceiptText("CARD NAME: KPLUS\nAMOUNT: -1.22 THB")).toBe(true);
+  });
+
+  it.each([
+    "THAIQR",
+    "Thai QR Payment",
+    "THAIQR PAYMENT",
+    "ThaiQRPayment",
+    "QR PAYMENT",
+    "QRPayment",
+  ])("uses %s in Google KPLUS confirmation", (keyword) => {
+    expect(isConfirmedKplusReceiptText(`KPLUS\n${keyword}\nAMOUNT 1.22`)).toBe(true);
+  });
+
+  it("passes KPLUS with a positive 1.22 amount", () => {
+    const inspection = inspectReceiptText("CHANNEL: KPLUS\nAMT: THB 1.22");
+    const decision = decideReceipt(inspection, 1.22, -1.22, 0.65);
+
+    expect(inspection).toMatchObject({
+      isKplusReceipt: true,
+      observedAmounts: [1.22],
+    });
+    expect(decision).toEqual({ status: "pass", failures: [] });
+    expect(hasExpectedAmount(inspection, 1.22, -1.22)).toBe(true);
+    expect(formatDecision(inspection, decision)).toContain("1.22");
+  });
+
+  it("passes K+ with a negative -1.22 amount", () => {
+    const inspection = inspectReceiptText("K+\nVOID\nAMT: -THB 1.22");
+    const decision = decideReceipt(inspection, 1.22, -1.22, 0.65);
+
+    expect(inspection).toMatchObject({
+      isKplusReceipt: true,
+      observedAmounts: [-1.22],
+    });
+    expect(decision).toEqual({ status: "pass", failures: [] });
+    expect(formatDecision(inspection, decision)).toContain("-1.22");
+  });
+
+  it("fails KPLUS when the amount is not 1.22 or -1.22", () => {
+    const inspection = inspectReceiptText("KPLUS\nAMT: THB 2.22");
+    const decision = decideReceipt(inspection, 1.22, -1.22, 0.65);
+
+    expect(decision.status).toBe("fail");
+  });
+
+  it("fails KPLUS when no amount can be read", () => {
+    const inspection = inspectReceiptText("KPLUS\nAMT: THB unreadable");
+    const decision = decideReceipt(inspection, 1.22, -1.22, 0.65);
+
+    expect(decision.status).toBe("fail");
+  });
+
+  it("replies with a failure when Google confirms KPLUS with another amount", () => {
+    const inspection = inspectConfirmedReceiptText("CHANNEL: KPLUS\nAMT: THB 5.00");
+
+    expect(shouldReplyAfterGoogleVision(inspection)).toBe(true);
+    expect(decideReceipt(inspection, 1.22, -1.22, 0.65).status).toBe("fail");
+  });
+
+  it("stays silent when Google does not confirm KPLUS", () => {
+    const inspection = inspectConfirmedReceiptText("OTHER RECEIPT\nAMT: THB 1.22");
+
+    expect(shouldReplyAfterGoogleVision(inspection)).toBe(false);
+  });
+});
