@@ -4,17 +4,14 @@ import {
   VISIBLE_TEXT_PROMPT,
   decideReceipt,
   formatDecision,
-  formatCompletedRound,
+  formatKplusSuccess,
   hasExpectedAmount,
-  hasKbankCandidateTextEvidence,
   hasGoogleCandidateTextEvidence,
   hasSettlementText,
   hasThaiQrPaymentText,
   inspectConfirmedReceiptText,
-  inspectKbankReceiptText,
   inspectReceiptText,
   isConfirmedKplusReceiptText,
-  isValidKbankReceipt,
   isKplusCandidateText,
   parseKplusVisualCandidate,
   shouldReplyAfterGoogleVision,
@@ -98,42 +95,13 @@ describe("receipt decision", () => {
     expect(hasGoogleCandidateTextEvidence(inspection, 1.22, -1.22)).toBe(false);
   });
 
-  it("accepts a KBANK settlement with any monetary amount", () => {
-    const inspection = inspectKbankReceiptText(
-      "KBank CREDIT CARD\nSETTLEMENT\nTOTAL THB 54.88",
+  it("formats the requested KPLUS-only success message", () => {
+    expect(formatKplusSuccess(1.22)).toBe(
+      "✅ เจอสลิป ผ่าน Kplus ยอด 1.22 บาท สลิปถูกต้อง",
     );
-
-    expect(inspection).toMatchObject({
-      isKbankReceipt: true,
-      hasSettlement: true,
-      observedAmounts: [54.88],
-    });
-    expect(isValidKbankReceipt(inspection)).toBe(true);
-    expect(hasKbankCandidateTextEvidence("KBANK\nTOTAL THB 54.88")).toBe(true);
-  });
-
-  it("does not count a K+ KBank receipt as the separate KBANK slip", () => {
-    const inspection = inspectKbankReceiptText(
-      "K+ KBank\nSETTLEMENT\nTOTAL THB 1.22",
+    expect(formatKplusSuccess(-1.22)).toBe(
+      "✅ เจอสลิป ผ่าน Kplus ยอด -1.22 บาท สลิปถูกต้อง",
     );
-
-    expect(inspection.isKbankReceipt).toBe(false);
-    expect(isValidKbankReceipt(inspection)).toBe(false);
-    expect(hasKbankCandidateTextEvidence("K+ KBank\nSETTLEMENT")).toBe(false);
-  });
-
-  it("requires SETTLEMENT and a monetary amount for the KBANK slip", () => {
-    expect(isValidKbankReceipt(inspectKbankReceiptText("KBANK\nTOTAL THB 88.00"))).toBe(false);
-    expect(isValidKbankReceipt(inspectKbankReceiptText("KBANK\nSETTLEMENT\nTIME 13.05"))).toBe(false);
-  });
-
-  it("formats one combined result after both receipt types are found", () => {
-    const result = formatCompletedRound(1.22, 54.88);
-
-    expect(result).toContain("ครบ 2 ใบ");
-    expect(result).toContain("KPLUS/K+");
-    expect(result).toContain("KBANK");
-    expect(result).toContain("54.88");
   });
 
   it("does not confirm KPLUS when it only appears in a service-form table", () => {

@@ -113,13 +113,12 @@ describe("processing control", () => {
     expect(page).toContain("Workers AI");
     expect(page).toContain("Google Vision");
     expect(page).toContain("SETTLEMENT");
-    expect(page).toContain("KBANK");
+    expect(page).toContain("ตรวจเฉพาะสลิป KPLUS");
     expect(page).toContain("imageSet");
-    expect(page).toContain("fallback 5 นาที");
     expect(page).toContain("0 / 1000 units");
     expect(page).toContain("สถิติวันนี้");
     expect(page).toContain("รูปซ้ำที่กันไว้");
-    expect(page).toContain("ต้องพบสลิปคนละ 2 ใบ");
+    expect(page).toContain("ตอบผ่านครั้งเดียวต่อชุดรูป");
   });
 
   it("lets an authenticated operator disable processing", async () => {

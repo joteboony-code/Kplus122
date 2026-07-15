@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { RECENT_PASS_TTL_SECONDS, recentPassKey } from "../src/reply-state";
+import {
+  IMAGE_SET_PASS_TTL_SECONDS,
+  RECENT_PASS_TTL_SECONDS,
+  recentPassKey,
+  recentPassTtl,
+} from "../src/reply-state";
 import type { ImageJob } from "../src/types";
 
 function job(overrides: Partial<ImageJob> = {}): ImageJob {
@@ -29,6 +34,8 @@ describe("recent pass suppression", () => {
     expect(recentPassKey(job({ imageSetId: "album-A" }))).not.toBe(
       recentPassKey(job({ imageSetId: "album-B" })),
     );
+    expect(recentPassTtl(job({ imageSetId: "album-A" }))).toBe(60 * 60);
+    expect(IMAGE_SET_PASS_TTL_SECONDS).toBe(60 * 60);
   });
 
   it("supports direct chats and expires after one minute", () => {
@@ -38,6 +45,7 @@ describe("recent pass suppression", () => {
       sourceType: "user",
     }))).toBe("recent-pass:v2:user-1:user-1:fallback");
     expect(RECENT_PASS_TTL_SECONDS).toBe(60);
+    expect(recentPassTtl(job())).toBe(60);
   });
 
   it("does not suppress when LINE omitted the conversation identity", () => {

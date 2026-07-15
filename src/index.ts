@@ -2,16 +2,13 @@ import {
   acceptWorkerPaymentName,
   classifyKplusVisualCandidate,
   decideReceipt,
-  formatCompletedRound,
+  formatKplusSuccess,
   formatDecision,
-  hasKbankCandidateTextEvidence,
   hasGoogleCandidateTextEvidence,
   hasThaiQrPaymentText,
   inspectConfirmedReceiptText,
-  inspectKbankReceiptText,
   inspectReceiptText,
   hasExpectedAmount,
-  isValidKbankReceipt,
   shouldReplyAfterGoogleVision,
   transcribeVisibleText,
 } from "./analyze";
@@ -36,11 +33,7 @@ import {
 } from "./line";
 import { hasRecentPass, recordRecentPass } from "./reply-state";
 import { isImageProcessed, markImageProcessed } from "./processing-state";
-import {
-  recordReceiptEvidence,
-  shouldReplyToIndividualFailure,
-  type ReceiptKind,
-} from "./receipt-round";
+import { shouldReplyToIndividualFailure } from "./receipt-round";
 import { d1StateStore } from "./state-store";
 import type { ImageJob, LineWebhookBody } from "./types";
 
@@ -64,58 +57,27 @@ function numericSetting(value: string, name: string): number {
   return parsed;
 }
 
-function representativeAmount(amounts: number[]): number {
-  return amounts.reduce(
-    (selected, amount) => Math.abs(amount) > Math.abs(selected) ? amount : selected,
-    amounts[0] ?? 0,
-  );
-}
-
-async function recordRoundCandidate(
+async function replyKplusSuccess(
   job: ImageJob,
-  kind: ReceiptKind,
   amount: number,
   provider: string,
   env: Env,
 ): Promise<ProcessOutcome> {
-  const round = await recordReceiptEvidence(
-    d1StateStore(env.CONTROL_DB),
-    job,
-    kind,
-    amount,
-  );
-
-  if (!round.complete || round.kplusAmount === undefined || round.kbankAmount === undefined) {
-    console.log(JSON.stringify({
-      event: "receipt_round_pending",
-      webhookEventId: job.webhookEventId,
-      provider,
-      recordedKind: kind,
-      imageSetId: job.imageSetId,
-      imageSetIndex: job.imageSetIndex,
-      imageSetTotal: job.imageSetTotal,
-      hasKplus: round.hasKplus,
-      hasKbank: round.hasKbank,
-    }));
-    return "ignored";
-  }
-
   await sendInspectionResult(
     job,
-    formatCompletedRound(round.kplusAmount, round.kbankAmount),
+    formatKplusSuccess(amount),
     env.LINE_CHANNEL_ACCESS_TOKEN,
     String(env.ENABLE_PUSH_FALLBACK) === "true",
   );
   await recordRecentPass(job, d1StateStore(env.CONTROL_DB));
 
   console.log(JSON.stringify({
-    event: "receipt_round_completed",
+    event: "kplus_receipt_passed",
     webhookEventId: job.webhookEventId,
     provider,
     imageSetId: job.imageSetId,
     imageSetTotal: job.imageSetTotal,
-    kplusAmount: round.kplusAmount,
-    kbankAmount: round.kbankAmount,
+    amount,
   }));
   return "pass";
 }
@@ -241,27 +203,14 @@ async function processImageJob(job: ImageJob, env: Env): Promise<ProcessOutcome>
           minConfidence,
         );
         const ocrSpaceHasAnyAmount = ocrSpaceInspection.observedAmounts.length > 0;
-        const ocrSpaceKbankInspection = inspectKbankReceiptText(ocrSpaceResult.text);
-
-        if (isValidKbankReceipt(ocrSpaceKbankInspection)) {
-          return recordRoundCandidate(
-            job,
-            "kbank",
-            representativeAmount(ocrSpaceKbankInspection.observedAmounts),
-            "ocr-space",
-            env,
-          );
-        }
-
         if (ocrSpaceDecision.status === "pass") {
           const matchedAmount = ocrSpaceInspection.observedAmounts.find(
             (amount) =>
               Math.abs(amount - expectedSale) < 0.005 ||
               Math.abs(amount - expectedVoid) < 0.005,
           ) ?? expectedSale;
-          return recordRoundCandidate(
+          return replyKplusSuccess(
             job,
-            "kplus",
             matchedAmount,
             "ocr-space",
             env,
@@ -308,7 +257,7 @@ async function processImageJob(job: ImageJob, env: Env): Promise<ProcessOutcome>
           expectedSale,
           expectedVoid,
           ocrSpaceResult.text,
-        ) || hasKbankCandidateTextEvidence(ocrSpaceResult.text);
+        );
 
         if (!ocrSpaceCandidate) {
           console.log(JSON.stringify({
@@ -344,16 +293,6 @@ async function processImageJob(job: ImageJob, env: Env): Promise<ProcessOutcome>
     await recordStat(env, "workersAiErrors");
     throw error;
   }
-  const workerKbankInspection = inspectKbankReceiptText(workerText);
-  if (isValidKbankReceipt(workerKbankInspection)) {
-    return recordRoundCandidate(
-      job,
-      "kbank",
-      representativeAmount(workerKbankInspection.observedAmounts),
-      "workers-ai",
-      env,
-    );
-  }
   const workerInspection = inspectReceiptText(workerText);
   const workerHasExpectedAmount = hasExpectedAmount(
     workerInspection,
@@ -379,9 +318,8 @@ async function processImageJob(job: ImageJob, env: Env): Promise<ProcessOutcome>
         Math.abs(amount - expectedSale) < 0.005 ||
         Math.abs(amount - expectedVoid) < 0.005,
     ) ?? expectedSale;
-    return recordRoundCandidate(
+    return replyKplusSuccess(
       job,
-      "kplus",
       matchedAmount,
       "workers-ai",
       env,
@@ -394,8 +332,7 @@ async function processImageJob(job: ImageJob, env: Env): Promise<ProcessOutcome>
     expectedVoid,
     workerText,
   );
-  const workerKbankCandidate = hasKbankCandidateTextEvidence(workerText);
-  const visualClassifierAttempted = !hasPartialTextEvidence && !workerKbankCandidate;
+  const visualClassifierAttempted = !hasPartialTextEvidence;
   let visualKplusCandidate = false;
   if (visualClassifierAttempted) {
     try {
@@ -408,7 +345,6 @@ async function processImageJob(job: ImageJob, env: Env): Promise<ProcessOutcome>
   }
   const googleCandidate =
     hasPartialTextEvidence ||
-    workerKbankCandidate ||
     visualKplusCandidate;
 
   if (!googleCandidate) {
@@ -459,16 +395,6 @@ async function processImageJob(job: ImageJob, env: Env): Promise<ProcessOutcome>
       error: error instanceof Error ? error.message : "unknown error",
     }));
   }
-  const googleKbankInspection = inspectKbankReceiptText(receiptText);
-  if (isValidKbankReceipt(googleKbankInspection)) {
-    return recordRoundCandidate(
-      job,
-      "kbank",
-      representativeAmount(googleKbankInspection.observedAmounts),
-      "google-vision",
-      env,
-    );
-  }
   const inspection = inspectConfirmedReceiptText(receiptText);
   const decision = decideReceipt(
     inspection,
@@ -504,9 +430,8 @@ async function processImageJob(job: ImageJob, env: Env): Promise<ProcessOutcome>
         Math.abs(amount - expectedSale) < 0.005 ||
         Math.abs(amount - expectedVoid) < 0.005,
     ) ?? expectedSale;
-    return recordRoundCandidate(
+    return replyKplusSuccess(
       job,
-      "kplus",
       matchedAmount,
       "google-vision",
       env,
