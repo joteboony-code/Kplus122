@@ -97,10 +97,10 @@ describe("receipt decision", () => {
 
   it("formats the requested KPLUS-only success message", () => {
     expect(formatKplusSuccess(1.22)).toBe(
-      "✅ เจอสลิป ผ่าน Kplus ยอด 1.22 บาท สลิปถูกต้อง",
+      "✅ ตรวจสอบผ่าน: พบสลิป KPLUS ยอด 1.22 บาท ข้อมูลถูกต้อง",
     );
     expect(formatKplusSuccess(-1.22)).toBe(
-      "✅ เจอสลิป ผ่าน Kplus ยอด -1.22 บาท สลิปถูกต้อง",
+      "✅ ตรวจสอบผ่าน: พบสลิป KPLUS ยอด -1.22 บาท ข้อมูลถูกต้อง",
     );
   });
 
@@ -166,6 +166,12 @@ describe("receipt decision", () => {
     const decision = decideReceipt(inspection, 1.22, -1.22, 0.65);
 
     expect(decision.status).toBe("fail");
+    expect(formatDecision(inspection, decision)).toBe([
+      "❌ ตรวจสอบไม่ผ่าน: สลิป KPLUS",
+      "ยอดที่อ่านได้: 2.22 บาท",
+      "สาเหตุ: ไม่พบยอด 1.22 หรือ -1.22 บาท",
+      "หาก Test ผ่าน Link POS อย่าลืมลง Remark",
+    ].join("\n"));
   });
 
   it("fails KPLUS when no amount can be read", () => {
@@ -173,6 +179,7 @@ describe("receipt decision", () => {
     const decision = decideReceipt(inspection, 1.22, -1.22, 0.65);
 
     expect(decision.status).toBe("fail");
+    expect(formatDecision(inspection, decision)).not.toContain("Link POS");
   });
 
   it("replies with a failure when Google confirms KPLUS with another amount", () => {

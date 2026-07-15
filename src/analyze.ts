@@ -212,7 +212,7 @@ export function shouldReplyAfterGoogleVision(
 }
 
 export function formatKplusSuccess(amount: number): string {
-  return `✅ เจอสลิป ผ่าน Kplus ยอด ${amount.toFixed(2)} บาท สลิปถูกต้อง`;
+  return `✅ ตรวจสอบผ่าน: พบสลิป KPLUS ยอด ${amount.toFixed(2)} บาท ข้อมูลถูกต้อง`;
 }
 
 export function formatDecision(
@@ -223,15 +223,24 @@ export function formatDecision(
     const matched = inspection.observedAmounts.find(
       (amount) => Math.abs(Math.abs(amount) - 1.22) < 0.005,
     );
-    return `✅ ผ่าน: พบ KPLUS/K+/Thai QR Payment, SETTLEMENT และยอด ${(matched ?? 1.22).toFixed(2)} บาท`;
+    return formatKplusSuccess(matched ?? 1.22);
   }
   if (decision.status === "uncertain") {
-    return "⚠️ พบ KPLUS/K+ แต่จำนวนเงินไม่ชัด กรุณาถ่ายใหม่ให้เห็นยอดเงิน";
+    return "⚠️ ตรวจสอบไม่สำเร็จ: พบหลักฐาน KPLUS แต่ข้อมูลไม่ชัดเจน กรุณาถ่ายใหม่ให้เห็น KPLUS, SETTLEMENT และยอดเงินครบถ้วน";
   }
 
-  return [
-    "❌ ไม่ผ่าน: ใบ KPLUS",
-    `ยอดที่อ่านได้: ${inspection.observedAmounts.length > 0 ? inspection.observedAmounts.map((amount) => amount.toFixed(2)).join(", ") : "อ่านไม่ได้"}`,
+  const lines = [
+    "❌ ตรวจสอบไม่ผ่าน: สลิป KPLUS",
+    `ยอดที่อ่านได้: ${inspection.observedAmounts.length > 0 ? `${inspection.observedAmounts.map((amount) => amount.toFixed(2)).join(", ")} บาท` : "อ่านยอดไม่ได้"}`,
     `สาเหตุ: ${decision.failures.join(", ")}`,
-  ].join("\n");
+  ];
+  const hasWrongReadableAmount =
+    inspection.observedAmounts.length > 0 &&
+    !inspection.observedAmounts.some(
+      (amount) => Math.abs(Math.abs(amount) - 1.22) < 0.005,
+    );
+  if (hasWrongReadableAmount) {
+    lines.push("หาก Test ผ่าน Link POS อย่าลืมลง Remark");
+  }
+  return lines.join("\n");
 }
