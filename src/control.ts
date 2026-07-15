@@ -198,9 +198,26 @@ function logCards(logs: InspectionLogRow[]): string {
         : log.outcome === "error"
           ? "ผิดพลาด"
           : "ข้าม/เงียบ";
+    const outcomeIcon = log.outcome === "pass"
+      ? "✓"
+      : log.outcome === "fail"
+        ? "✕"
+        : log.outcome === "error"
+          ? "!"
+          : "−";
     const amounts = log.observed_amounts
       ? escapeHtml(log.observed_amounts.replaceAll(/[\[\]"]/g, ""))
       : "-";
+    const kplusState = log.has_kplus === null
+      ? { css: "unknown", text: "ยังไม่ทราบ" }
+      : log.has_kplus
+        ? { css: "found", text: "พบ KPLUS" }
+        : { css: "missing", text: "ไม่พบ KPLUS" };
+    const settlementState = log.has_settlement === null
+      ? { css: "unknown", text: "ยังไม่ทราบ" }
+      : log.has_settlement
+        ? { css: "found", text: "พบ SETTLEMENT" }
+        : { css: "missing", text: "ไม่พบ SETTLEMENT" };
     let timing = "";
     if (log.provider_timings) {
       try {
@@ -213,14 +230,18 @@ function logCards(logs: InspectionLogRow[]): string {
       }
     }
     return `<article class="log-card ${escapeHtml(log.outcome)}">
-      <div class="log-head"><b>${outcomeLabel}</b><time>${escapeHtml(time)}</time></div>
+      <div class="log-head"><b class="outcome-badge"><i>${outcomeIcon}</i>${outcomeLabel}</b><time>${escapeHtml(time)}</time></div>
       <div class="log-grid">
-        <span><small>เลขงาน</small>${escapeHtml(log.reference_code ?? "ไม่ระบุ")}</span>
+        <span><small>เลขงาน</small><strong class="job-value">${escapeHtml(log.reference_code ?? "ไม่ระบุ")}</strong></span>
         <span><small>เส้นทางตรวจ</small>${escapeHtml(log.provider_chain ?? "ไม่เรียก OCR")}</span>
-        <span><small>ยอดที่อ่านได้</small>${amounts}</span>
+        <span><small>ยอดที่อ่านได้</small><strong class="amount-value">${amounts}</strong></span>
         <span><small>เวลา</small>${log.processing_ms}ms${log.queue_delay_ms === null ? "" : ` · รอคิว ${log.queue_delay_ms}ms`}</span>
       </div>
-      <div class="log-detail">ขั้นตอน: ${escapeHtml(log.stage ?? "-")} · KPLUS: ${log.has_kplus === null ? "-" : log.has_kplus ? "พบ" : "ไม่พบ"} · SETTLEMENT: ${log.has_settlement === null ? "-" : log.has_settlement ? "พบ" : "ไม่พบ"}${timing ? ` · ${escapeHtml(timing)}` : ""}${log.error ? ` · ${escapeHtml(log.error)}` : ""}</div>
+      <div class="evidence-row" aria-label="หลักฐานที่ตรวจพบ">
+        <span class="evidence-chip ${kplusState.css}"><i>${kplusState.css === "found" ? "✓" : kplusState.css === "missing" ? "✕" : "?"}</i>${kplusState.text}</span>
+        <span class="evidence-chip ${settlementState.css}"><i>${settlementState.css === "found" ? "✓" : settlementState.css === "missing" ? "✕" : "?"}</i>${settlementState.text}</span>
+      </div>
+      <div class="log-detail">ขั้นตอน: ${escapeHtml(log.stage ?? "-")}${timing ? ` · ${escapeHtml(timing)}` : ""}${log.error ? ` · ${escapeHtml(log.error)}` : ""}</div>
     </article>`;
   }).join("");
 }
@@ -284,7 +305,7 @@ function controlPage(enabled: boolean, providers: ProviderStatus): string {
     .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}.stat{padding:13px;border:1px solid #294537;border-radius:13px;background:#0a1710}.stat small{display:block;color:#718d7e;font-size:11px}.stat strong{display:block;margin-top:5px;font-size:22px}.stat.wide{grid-column:span 2}.stat em{display:block;margin-top:5px;color:#8ca799;font-size:11px;font-style:normal;line-height:1.4}
     .meter{height:7px;margin-top:11px;border-radius:99px;background:#203429;overflow:hidden}.meter span{display:block;height:100%;width:${Math.min((providers.ocrSpaceUsage / OCR_SPACE_DAILY_LIMIT) * 100, 100)}%;background:${ocrSpaceRemaining > 0 ? "#30dc78" : "#f06474"}}
     .notice{margin-top:16px;padding:14px 16px;border-radius:13px;background:#172019;color:#91aa9c;font-size:13px;line-height:1.6;border:1px solid #293a30}
-    .logs{display:grid;gap:10px}.log-card,.log-empty{padding:14px;border:1px solid #294537;border-radius:14px;background:#0a1710}.log-card.pass{border-color:#28784c}.log-card.fail,.log-card.error{border-color:#743b45}.log-head{display:flex;justify-content:space-between;gap:12px}.log-head time{color:#789486;font-size:12px}.log-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-top:10px}.log-grid span{font-size:13px}.log-grid small{display:block;color:#718d7e;font-size:10px}.log-detail{margin-top:9px;color:#8ca799;font-size:11px;line-height:1.5;overflow-wrap:anywhere}.log-actions{display:flex;justify-content:space-between;align-items:center;margin:22px 0 10px}.log-actions .section-title{margin:0}.clear-logs button{border:1px solid #663b41;border-radius:9px;background:transparent;color:#ff9daa;padding:7px 10px;cursor:pointer}.log-empty{color:#789486;text-align:center}
+    .logs{display:grid;gap:14px}.log-card,.log-empty{position:relative;overflow:hidden;padding:16px;border:2px solid #294537;border-radius:16px;background:#0a1710}.log-card::before{content:"";position:absolute;inset:0 auto 0 0;width:5px;background:#536b5e}.log-card.pass{border-color:#2bc96c;background:linear-gradient(135deg,#123522 0,#0a1710 68%);box-shadow:0 0 0 1px #2bc96c22,0 9px 28px #20b75b18}.log-card.pass::before{background:#36e77c;box-shadow:0 0 16px #36e77c}.log-card.fail{border-color:#e05264;background:linear-gradient(135deg,#35171d 0,#0a1710 68%);box-shadow:0 0 0 1px #e0526422,0 9px 28px #d53f5218}.log-card.fail::before{background:#ff6478;box-shadow:0 0 16px #ff6478}.log-card.error{border-color:#ef9c45;background:linear-gradient(135deg,#352515 0,#0a1710 68%)}.log-card.error::before{background:#ffad55}.log-card.ignored{border-color:#52695d;background:linear-gradient(135deg,#17251d 0,#0a1710 68%)}.log-head{display:flex;justify-content:space-between;gap:12px;align-items:center}.log-head time{color:#9ab2a5;font-size:12px}.outcome-badge{display:inline-flex;align-items:center;gap:8px;font-size:17px}.outcome-badge i,.evidence-chip i{display:grid;place-items:center;font-style:normal;font-weight:900}.outcome-badge i{width:25px;height:25px;border-radius:50%;background:#52695d;color:#fff}.pass .outcome-badge{color:#70f5a5}.pass .outcome-badge i{background:#2bc96c;color:#05200f}.fail .outcome-badge{color:#ff8c9a}.fail .outcome-badge i{background:#e05264}.error .outcome-badge{color:#ffc17e}.error .outcome-badge i{background:#ef9c45;color:#251406}.log-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-top:13px}.log-grid span{font-size:13px}.log-grid small{display:block;color:#789486;font-size:10px;margin-bottom:2px}.job-value,.amount-value{display:block;font-size:15px;color:#f4fff8;letter-spacing:.02em}.pass .amount-value{color:#70f5a5}.fail .amount-value{color:#ff9aa6}.evidence-row{display:flex;flex-wrap:wrap;gap:8px;margin-top:13px}.evidence-chip{display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border:1px solid #43574c;border-radius:999px;background:#142019;color:#9db1a6;font-size:12px;font-weight:800}.evidence-chip i{width:17px;height:17px;border-radius:50%;font-size:11px}.evidence-chip.found{border-color:#2bc96c;background:#123a23;color:#79f5a8}.evidence-chip.found i{background:#2bc96c;color:#05200f}.evidence-chip.missing{border-color:#b84554;background:#38181e;color:#ff9aa7}.evidence-chip.missing i{background:#d84f61;color:#fff}.evidence-chip.unknown i{background:#52695d;color:#fff}.log-detail{margin-top:11px;padding-top:10px;border-top:1px solid #294537;color:#9ab2a5;font-size:11px;line-height:1.5;overflow-wrap:anywhere}.log-actions{display:flex;justify-content:space-between;align-items:center;margin:22px 0 10px}.log-actions .section-title{margin:0}.clear-logs button{border:1px solid #663b41;border-radius:9px;background:transparent;color:#ff9daa;padding:7px 10px;cursor:pointer}.log-empty{color:#789486;text-align:center}
     @media(max-width:650px){body{padding:15px}.shell{margin:12px auto}.panel{padding:25px}.pipeline,.meta{grid-template-columns:1fr}.stats{grid-template-columns:repeat(2,1fr)}.step:not(:last-child)::after{content:"↓";right:50%;top:auto;bottom:-18px;transform:translateX(50%)}.brand span{display:none}}
   </style>
 </head>

@@ -39,6 +39,41 @@ function memoryControlDb(): D1Database {
   } as D1Database;
 }
 
+function controlDbWithLog(): D1Database {
+  const base = memoryControlDb();
+  return {
+    prepare: (sql: string) => {
+      if (!sql.includes("FROM inspection_logs")) return base.prepare(sql);
+      const statement = {
+        bind: () => statement,
+        all: async () => ({
+          success: true,
+          results: [{
+            id: 1,
+            created_at: 1_784_133_300,
+            webhook_event_id: "event-1",
+            message_id: "message-1",
+            group_id: "group-1",
+            user_id: "user-1",
+            reference_code: "28038457",
+            outcome: "pass",
+            stage: "ocr-space",
+            provider_chain: "ocr-space",
+            provider_timings: '{"ocr-space":1220}',
+            observed_amounts: "[1.22,-1.22]",
+            has_kplus: 1,
+            has_settlement: 1,
+            queue_delay_ms: 250,
+            processing_ms: 1562,
+            error: null,
+          }],
+        }),
+      } as unknown as D1PreparedStatement;
+      return statement;
+    },
+  } as D1Database;
+}
+
 describe("processing control", () => {
   it("defaults to enabled so existing deployments keep working", async () => {
     expect(await isProcessingEnabled(memoryControlDb())).toBe(true);
@@ -156,6 +191,38 @@ describe("processing control", () => {
     );
     expect(toggle?.status).toBe(303);
     expect(await isProcessingEnabled(controlDb)).toBe(false);
+  });
+
+  it("highlights the complete result card and detected evidence", async () => {
+    const env = {
+      CONTROL_PASSWORD: "strong-test-password",
+      CONTROL_DB: controlDbWithLog(),
+      REPLY_STATE: memoryKv(),
+    };
+    const login = await handleControlRequest(
+      new Request("https://example.com/control/login", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+          Origin: "https://example.com",
+        },
+        body: new URLSearchParams({ password: env.CONTROL_PASSWORD }),
+      }),
+      env,
+    );
+    const sessionCookie = login?.headers.get("Set-Cookie")?.split(";", 1)[0] ?? "";
+    const control = await handleControlRequest(
+      new Request("https://example.com/control", {
+        headers: { Cookie: sessionCookie },
+      }),
+      env,
+    );
+    const page = await control?.text();
+    expect(page).toContain('class="log-card pass"');
+    expect(page).toContain('class="evidence-chip found"><i>✓</i>พบ KPLUS');
+    expect(page).toContain('class="evidence-chip found"><i>✓</i>พบ SETTLEMENT');
+    expect(page).toContain('class="amount-value">1.22,-1.22');
+    expect(page).toContain('class="job-value">28038457');
   });
 
   it("accepts a browser same-origin form when Origin is serialized as null", async () => {
