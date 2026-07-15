@@ -43,6 +43,18 @@ export interface ImageJob {
   imageSetTotal?: number;
 }
 
+export interface RoundFinalizeJob {
+  kind: "round-finalize";
+  roundKey: string;
+  generation: string;
+}
+
+export type QueueJob = ImageJob | RoundFinalizeJob;
+
+export function isRoundFinalizeJob(job: QueueJob): job is RoundFinalizeJob {
+  return "kind" in job && job.kind === "round-finalize";
+}
+
 export interface ReceiptInspection {
   isKplusReceipt: boolean;
   hasSettlement: boolean;

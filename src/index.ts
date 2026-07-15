@@ -28,16 +28,35 @@ import { handleControlRequest, isProcessingEnabled } from "./control";
 import {
   downloadLineImage,
   imageJobFromEvent,
+  sendInspectionPushResult,
   sendInspectionResult,
   verifyLineSignature,
 } from "./line";
 import { hasRecentPass, recordRecentPass } from "./reply-state";
 import { isImageProcessed, markImageProcessed } from "./processing-state";
-import { shouldReplyToIndividualFailure } from "./receipt-round";
+import {
+  completeRoundAfterPass,
+  finalizeRound,
+  recordRoundActivity,
+  ROUND_INACTIVITY_SECONDS,
+  type RoundEvidence,
+} from "./receipt-round";
 import { d1StateStore } from "./state-store";
-import type { ImageJob, LineWebhookBody } from "./types";
+import {
+  isRoundFinalizeJob,
+  type ImageJob,
+  type LineWebhookBody,
+  type QueueJob,
+  type RoundFinalizeJob,
+} from "./types";
 
 type ProcessOutcome = "pass" | "fail" | "ignored";
+interface ProcessResult {
+  outcome: ProcessOutcome;
+  evidence?: Omit<RoundEvidence, "job">;
+}
+
+const IGNORED_RESULT: ProcessResult = { outcome: "ignored" };
 
 async function recordStat(env: Env, name: DailyStatName): Promise<void> {
   try {
@@ -62,7 +81,7 @@ async function replyKplusSuccess(
   amount: number,
   provider: string,
   env: Env,
-): Promise<ProcessOutcome> {
+): Promise<ProcessResult> {
   await sendInspectionResult(
     job,
     formatKplusSuccess(amount),
@@ -79,7 +98,7 @@ async function replyKplusSuccess(
     imageSetTotal: job.imageSetTotal,
     amount,
   }));
-  return "pass";
+  return { outcome: "pass" };
 }
 
 async function handleWebhook(request: Request, env: Env): Promise<Response> {
@@ -121,7 +140,7 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
   return Response.json({ accepted: jobs.length });
 }
 
-async function processImageJob(job: ImageJob, env: Env): Promise<ProcessOutcome> {
+async function processImageJob(job: ImageJob, env: Env): Promise<ProcessResult> {
   const expectedSale = numericSetting(env.EXPECTED_SALE_AMOUNT, "EXPECTED_SALE_AMOUNT");
   const expectedVoid = numericSetting(env.EXPECTED_VOID_AMOUNT, "EXPECTED_VOID_AMOUNT");
   const minConfidence = numericSetting(env.MIN_CONFIDENCE, "MIN_CONFIDENCE");
@@ -132,7 +151,7 @@ async function processImageJob(job: ImageJob, env: Env): Promise<ProcessOutcome>
       webhookEventId: job.webhookEventId,
       stage: "recent-pass-suppression",
     }));
-    return "ignored";
+    return IGNORED_RESULT;
   }
 
   const original = await downloadLineImage(job.messageId, env.LINE_CHANNEL_ACCESS_TOKEN);
@@ -229,17 +248,9 @@ async function processImageJob(job: ImageJob, env: Env): Promise<ProcessOutcome>
               stage: "recent-pass-suppression",
               ocrProvider: "ocr-space",
             }));
-            return "ignored";
+            return IGNORED_RESULT;
           }
 
-          if (shouldReplyToIndividualFailure(job)) {
-            await sendInspectionResult(
-              job,
-              formatDecision(ocrSpaceInspection, ocrSpaceDecision),
-              env.LINE_CHANNEL_ACCESS_TOKEN,
-              String(env.ENABLE_PUSH_FALLBACK) === "true",
-            );
-          }
           console.log(JSON.stringify({
             event: "receipt_processed",
             webhookEventId: job.webhookEventId,
@@ -249,7 +260,13 @@ async function processImageJob(job: ImageJob, env: Env): Promise<ProcessOutcome>
             ocrProvider: "ocr-space",
             ocrSpaceUsage,
           }));
-          return "fail";
+          return {
+            outcome: "fail",
+            evidence: {
+              kind: "wrong-amount",
+              text: formatDecision(ocrSpaceInspection, ocrSpaceDecision),
+            },
+          };
         }
 
         const ocrSpaceCandidate = hasGoogleCandidateTextEvidence(
@@ -266,7 +283,7 @@ async function processImageJob(job: ImageJob, env: Env): Promise<ProcessOutcome>
             stage: "ocr-space-filter",
             ocrSpaceUsage,
           }));
-          return "ignored";
+          return IGNORED_RESULT;
         }
 
         console.log(JSON.stringify({
@@ -360,7 +377,7 @@ async function processImageJob(job: ImageJob, env: Env): Promise<ProcessOutcome>
       visualClassifierAttempted,
       visualKplusCandidate,
     }));
-    return "ignored";
+    return IGNORED_RESULT;
   }
 
   if (!env.GOOGLE_VISION_API_KEY) {
@@ -374,7 +391,7 @@ async function processImageJob(job: ImageJob, env: Env): Promise<ProcessOutcome>
       webhookEventId: job.webhookEventId,
       stage: "google-vision-monthly-cap",
     }));
-    return "ignored";
+    return IGNORED_RESULT;
   }
 
   let receiptText: string;
@@ -421,7 +438,19 @@ async function processImageJob(job: ImageJob, env: Env): Promise<ProcessOutcome>
       visualKplusCandidate,
       googleVisionUsage,
     }));
-    return "ignored";
+    if (inspection.isKplusReceipt) {
+      return {
+        outcome: "fail",
+        evidence: {
+          kind: "uncertain",
+          text: formatDecision(inspection, {
+            status: "uncertain",
+            failures: ["ข้อมูล KPLUS ไม่ชัดเจน"],
+          }),
+        },
+      };
+    }
+    return IGNORED_RESULT;
   }
 
   if (decision.status === "pass") {
@@ -446,17 +475,9 @@ async function processImageJob(job: ImageJob, env: Env): Promise<ProcessOutcome>
       pendingStatus: decision.status,
       ocrProvider: "google-vision",
     }));
-    return "ignored";
+    return IGNORED_RESULT;
   }
 
-  if (shouldReplyToIndividualFailure(job)) {
-    await sendInspectionResult(
-      job,
-      formatDecision(inspection, decision),
-      env.LINE_CHANNEL_ACCESS_TOKEN,
-      String(env.ENABLE_PUSH_FALLBACK) === "true",
-    );
-  }
   console.log(JSON.stringify({
     event: "receipt_processed",
     webhookEventId: job.webhookEventId,
@@ -473,7 +494,52 @@ async function processImageJob(job: ImageJob, env: Env): Promise<ProcessOutcome>
     visualKplusCandidate,
     googleVisionUsage,
   }));
-  return "fail";
+  return {
+    outcome: "fail",
+    evidence: {
+      kind: inspection.observedAmounts.length > 0 ? "wrong-amount" : "uncertain",
+      text: formatDecision(
+        inspection,
+        inspection.observedAmounts.length > 0
+          ? decision
+          : { status: "uncertain", failures: ["อ่านยอดเงินไม่ได้"] },
+      ),
+    },
+  };
+}
+
+async function processRoundFinalizer(
+  job: RoundFinalizeJob,
+  env: Env,
+): Promise<void> {
+  const result = await finalizeRound(job, d1StateStore(env.CONTROL_DB));
+  if (result.status === "waiting") {
+    await env.IMAGE_QUEUE.send(job, {
+      delaySeconds: result.retryAfterSeconds ?? ROUND_INACTIVITY_SECONDS,
+    });
+    return;
+  }
+  if (result.status !== "finalized") return;
+
+  if (result.evidence) {
+    const sent = await sendInspectionPushResult(
+      result.evidence.job,
+      result.evidence.text,
+      env.LINE_CHANNEL_ACCESS_TOKEN,
+    );
+    if (!sent) {
+      console.error(JSON.stringify({
+        event: "receipt_round_summary_failed",
+        roundKey: job.roundKey,
+        evidenceKind: result.evidence.kind,
+      }));
+    }
+  }
+  console.log(JSON.stringify({
+    event: "receipt_round_finalized",
+    roundKey: job.roundKey,
+    result: result.evidence?.kind ?? "silent-no-kplus",
+  }));
 }
 
 export default {
@@ -493,6 +559,12 @@ export default {
   async queue(batch, env): Promise<void> {
     for (const message of batch.messages) {
       try {
+        if (isRoundFinalizeJob(message.body)) {
+          await processRoundFinalizer(message.body, env);
+          message.ack();
+          continue;
+        }
+
         if (message.attempts === 1) await recordStat(env, "received");
 
         const operationalState = d1StateStore(env.CONTROL_DB);
@@ -525,7 +597,28 @@ export default {
           continue;
         }
 
-        const outcome = await processImageJob(message.body, env);
+        const result = await processImageJob(message.body, env);
+        if (result.outcome === "pass") {
+          await completeRoundAfterPass(message.body, operationalState);
+        } else {
+          const finalizer = await recordRoundActivity(
+            message.body,
+            result.evidence ? { ...result.evidence, job: message.body } : undefined,
+            operationalState,
+          );
+          if (finalizer) {
+            await env.IMAGE_QUEUE.send(finalizer, {
+              delaySeconds: ROUND_INACTIVITY_SECONDS,
+            });
+          } else if (result.evidence) {
+            await sendInspectionResult(
+              message.body,
+              result.evidence.text,
+              env.LINE_CHANNEL_ACCESS_TOKEN,
+              String(env.ENABLE_PUSH_FALLBACK) === "true",
+            );
+          }
+        }
         try {
           await markImageProcessed(message.body, operationalState);
         } catch (error) {
@@ -539,7 +632,11 @@ export default {
         await recordStat(env, "processed");
         await recordStat(
           env,
-          outcome === "pass" ? "passed" : outcome === "fail" ? "failed" : "ignored",
+          result.outcome === "pass"
+            ? "passed"
+            : result.outcome === "fail"
+              ? "failed"
+              : "ignored",
         );
         message.ack();
       } catch (error) {
@@ -554,4 +651,4 @@ export default {
       }
     }
   },
-} satisfies ExportedHandler<Env, ImageJob>;
+} satisfies ExportedHandler<Env, QueueJob>;

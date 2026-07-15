@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { imageJobFromEvent, sendInspectionResult, verifyLineSignature } from "../src/line";
+import {
+  imageJobFromEvent,
+  sendInspectionPushResult,
+  sendInspectionResult,
+  verifyLineSignature,
+} from "../src/line";
 
 function bytesToBase64(bytes: Uint8Array): string {
   let binary = "";
@@ -112,5 +117,22 @@ describe("LINE webhook", () => {
       messages: Array<{ type: string; text: string }>;
     };
     expect(payload.messages[0]).toEqual({ type: "text", text: "ผลตรวจ" });
+  });
+
+  it("uses push for an end-of-round summary", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const sent = await sendInspectionPushResult({
+      webhookEventId: "event-3",
+      messageId: "image-3",
+      replyToken: "expired-reply-token",
+      replyTarget: "group-1",
+      sourceType: "group",
+      senderUserId: "U123",
+    }, "round summary", "channel-token");
+
+    expect(sent).toBe(true);
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("https://api.line.me/v2/bot/message/push");
   });
 });

@@ -156,17 +156,12 @@ async function postLineMessage(
   return true;
 }
 
-export async function sendInspectionResult(
-  job: ImageJob,
-  text: string,
-  channelAccessToken: string,
-  enablePushFallback: boolean,
-): Promise<void> {
+function inspectionMessage(job: ImageJob, text: string): object {
   const canMentionSender =
     (job.sourceType === "group" || job.sourceType === "room") &&
     Boolean(job.senderUserId);
   const quote = job.quoteToken ? { quoteToken: job.quoteToken } : {};
-  const message = canMentionSender
+  return canMentionSender
     ? {
         type: "textV2",
         text: `{sender}\n${text}`,
@@ -179,6 +174,15 @@ export async function sendInspectionResult(
         },
       }
     : { type: "text", text, ...quote };
+}
+
+export async function sendInspectionResult(
+  job: ImageJob,
+  text: string,
+  channelAccessToken: string,
+  enablePushFallback: boolean,
+): Promise<void> {
+  const message = inspectionMessage(job, text);
 
   const replied = await postLineMessage(
     "/v2/bot/message/reply",
@@ -195,4 +199,16 @@ export async function sendInspectionResult(
       messages: [message],
     });
   }
+}
+
+export async function sendInspectionPushResult(
+  job: ImageJob,
+  text: string,
+  channelAccessToken: string,
+): Promise<boolean> {
+  if (!job.replyTarget) return false;
+  return postLineMessage("/v2/bot/message/push", channelAccessToken, {
+    to: job.replyTarget,
+    messages: [inspectionMessage(job, text)],
+  });
 }

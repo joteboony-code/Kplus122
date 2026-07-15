@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  IMAGE_SET_PASS_TTL_SECONDS,
   RECENT_PASS_TTL_SECONDS,
   recentPassKey,
   recentPassTtl,
@@ -21,21 +20,17 @@ function job(overrides: Partial<ImageJob> = {}): ImageJob {
 
 describe("recent pass suppression", () => {
   it("scopes a pass to the conversation and sender", () => {
-    expect(recentPassKey(job())).toBe("recent-pass:v2:group-1:user-1:fallback");
+    expect(recentPassKey(job())).toBe("recent-pass:v3:group-1:user-1");
     expect(recentPassKey(job({ senderUserId: "user-2" }))).not.toBe(
       recentPassKey(job()),
     );
   });
 
-  it("suppresses only the completed LINE image set", () => {
+  it("suppresses later albums in the same one-minute sender round", () => {
     expect(recentPassKey(job({ imageSetId: "album-A" }))).toBe(
-      "recent-pass:v2:group-1:user-1:image-set:album-A",
-    );
-    expect(recentPassKey(job({ imageSetId: "album-A" }))).not.toBe(
       recentPassKey(job({ imageSetId: "album-B" })),
     );
-    expect(recentPassTtl(job({ imageSetId: "album-A" }))).toBe(60 * 60);
-    expect(IMAGE_SET_PASS_TTL_SECONDS).toBe(60 * 60);
+    expect(recentPassTtl(job({ imageSetId: "album-A" }))).toBe(60);
   });
 
   it("supports direct chats and expires after one minute", () => {
@@ -43,7 +38,7 @@ describe("recent pass suppression", () => {
       replyTarget: "user-1",
       senderUserId: "user-1",
       sourceType: "user",
-    }))).toBe("recent-pass:v2:user-1:user-1:fallback");
+    }))).toBe("recent-pass:v3:user-1:user-1");
     expect(RECENT_PASS_TTL_SECONDS).toBe(60);
     expect(recentPassTtl(job())).toBe(60);
   });
