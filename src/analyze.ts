@@ -95,6 +95,10 @@ export function hasThaiQrPaymentText(text: string): boolean {
   return /\b(?:THAI\s*QR(?:\s*PAYMENT)?|QR\s*PAYMENT)\b/.test(normalized);
 }
 
+export function hasSettlementText(text: string): boolean {
+  return /\bSETTLEMENT\b/.test(normalizeOcrText(text));
+}
+
 export function acceptWorkerPaymentName(
   inspection: ReceiptInspection,
   sourceText: string,
@@ -121,26 +125,30 @@ function amountsFromText(normalized: string): number[] {
 export function inspectReceiptText(text: string): ReceiptInspection {
   const normalized = normalizeOcrText(text);
   const isKplusReceipt = isKplusCandidateText(normalized);
+  const hasSettlement = hasSettlementText(normalized);
   const observedAmounts = amountsFromText(normalized);
 
   return {
     isKplusReceipt,
+    hasSettlement,
     observedAmounts,
     confidence: isKplusReceipt && observedAmounts.length > 0 ? 0.99 : isKplusReceipt ? 0.8 : 0.2,
-    reason: `brand=${isKplusReceipt}; amounts=${observedAmounts.join(",") || "none"}`,
+    reason: `brand=${isKplusReceipt}; settlement=${hasSettlement}; amounts=${observedAmounts.join(",") || "none"}`,
   };
 }
 
 export function inspectConfirmedReceiptText(text: string): ReceiptInspection {
   const normalized = normalizeOcrText(text);
   const isKplusReceipt = isConfirmedKplusReceiptText(normalized);
+  const hasSettlement = hasSettlementText(normalized);
   const observedAmounts = amountsFromText(normalized);
 
   return {
     isKplusReceipt,
+    hasSettlement,
     observedAmounts,
     confidence: isKplusReceipt && observedAmounts.length > 0 ? 0.99 : isKplusReceipt ? 0.8 : 0.2,
-    reason: `confirmedBrand=${isKplusReceipt}; amounts=${observedAmounts.join(",") || "none"}`,
+    reason: `confirmedBrand=${isKplusReceipt}; settlement=${hasSettlement}; amounts=${observedAmounts.join(",") || "none"}`,
   };
 }
 
@@ -182,6 +190,9 @@ export function decideReceipt(
   }
 
   const failures: string[] = [];
+  if (!inspection.hasSettlement) {
+    failures.push("ไม่พบคำว่า SETTLEMENT");
+  }
   const hasAllowedAmount = hasExpectedAmount(inspection, expectedSale, expectedVoid);
   if (!hasAllowedAmount) {
     failures.push(
@@ -208,7 +219,7 @@ export function formatDecision(
     const matched = inspection.observedAmounts.find(
       (amount) => Math.abs(Math.abs(amount) - 1.22) < 0.005,
     );
-    return `✅ ผ่าน: พบ KPLUS/K+/Thai QR Payment และยอด ${(matched ?? 1.22).toFixed(2)} บาท`;
+    return `✅ ผ่าน: พบ KPLUS/K+/Thai QR Payment, SETTLEMENT และยอด ${(matched ?? 1.22).toFixed(2)} บาท`;
   }
   if (decision.status === "uncertain") {
     return "⚠️ พบ KPLUS/K+ แต่จำนวนเงินไม่ชัด กรุณาถ่ายใหม่ให้เห็นยอดเงิน";

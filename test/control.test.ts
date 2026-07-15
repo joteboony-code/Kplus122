@@ -78,6 +78,7 @@ describe("processing control", () => {
     expect(page).toContain("0 / 500 รูป");
     expect(page).toContain("Workers AI");
     expect(page).toContain("Google Vision");
+    expect(page).toContain("SETTLEMENT");
     expect(page).toContain("0 / 1000 units");
     expect(page).toContain("สถิติวันนี้");
     expect(page).toContain("รูปซ้ำที่กันไว้");

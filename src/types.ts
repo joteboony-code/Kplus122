@@ -37,6 +37,7 @@ export interface ImageJob {
 
 export interface ReceiptInspection {
   isKplusReceipt: boolean;
+  hasSettlement: boolean;
   observedAmounts: number[];
   confidence: number;
   reason: string;

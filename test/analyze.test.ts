@@ -6,6 +6,7 @@ import {
   formatDecision,
   hasExpectedAmount,
   hasGoogleCandidateTextEvidence,
+  hasSettlementText,
   hasThaiQrPaymentText,
   inspectConfirmedReceiptText,
   inspectReceiptText,
@@ -71,14 +72,15 @@ describe("receipt decision", () => {
     "Thai QR Payment",
     "QR PAYMENT",
   ])("passes directly from Workers AI when %s and the expected amount are readable", (name) => {
-    const inspection = inspectReceiptText(`${name}\nAMOUNT 1.22`);
-    const accepted = acceptWorkerPaymentName(inspection, `${name}\nAMOUNT 1.22`);
+    const sourceText = `${name}\nSETTLEMENT\nAMOUNT 1.22`;
+    const inspection = inspectReceiptText(sourceText);
+    const accepted = acceptWorkerPaymentName(inspection, sourceText);
 
     expect(decideReceipt(accepted, 1.22, -1.22, 0.65).status).toBe("pass");
   });
 
   it("does not direct-pass a payment name without the expected amount", () => {
-    const text = "Thai QR Payment\nAMOUNT 8.00";
+    const text = "Thai QR Payment\nSETTLEMENT\nAMOUNT 8.00";
     const accepted = acceptWorkerPaymentName(inspectReceiptText(text), text);
 
     expect(decideReceipt(accepted, 1.22, -1.22, 0.65).status).toBe("fail");
@@ -123,11 +125,12 @@ describe("receipt decision", () => {
   });
 
   it("passes KPLUS with a positive 1.22 amount", () => {
-    const inspection = inspectReceiptText("CHANNEL: KPLUS\nAMT: THB 1.22");
+    const inspection = inspectReceiptText("CHANNEL: KPLUS\nSETTLEMENT\nAMT: THB 1.22");
     const decision = decideReceipt(inspection, 1.22, -1.22, 0.65);
 
     expect(inspection).toMatchObject({
       isKplusReceipt: true,
+      hasSettlement: true,
       observedAmounts: [1.22],
     });
     expect(decision).toEqual({ status: "pass", failures: [] });
@@ -136,11 +139,12 @@ describe("receipt decision", () => {
   });
 
   it("passes K+ with a negative -1.22 amount", () => {
-    const inspection = inspectReceiptText("K+\nVOID\nAMT: -THB 1.22");
+    const inspection = inspectReceiptText("K+\nSETTLEMENT\nVOID\nAMT: -THB 1.22");
     const decision = decideReceipt(inspection, 1.22, -1.22, 0.65);
 
     expect(inspection).toMatchObject({
       isKplusReceipt: true,
+      hasSettlement: true,
       observedAmounts: [-1.22],
     });
     expect(decision).toEqual({ status: "pass", failures: [] });
@@ -148,21 +152,21 @@ describe("receipt decision", () => {
   });
 
   it("fails KPLUS when the amount is not 1.22 or -1.22", () => {
-    const inspection = inspectReceiptText("KPLUS\nAMT: THB 2.22");
+    const inspection = inspectReceiptText("KPLUS\nSETTLEMENT\nAMT: THB 2.22");
     const decision = decideReceipt(inspection, 1.22, -1.22, 0.65);
 
     expect(decision.status).toBe("fail");
   });
 
   it("fails KPLUS when no amount can be read", () => {
-    const inspection = inspectReceiptText("KPLUS\nAMT: THB unreadable");
+    const inspection = inspectReceiptText("KPLUS\nSETTLEMENT\nAMT: THB unreadable");
     const decision = decideReceipt(inspection, 1.22, -1.22, 0.65);
 
     expect(decision.status).toBe("fail");
   });
 
   it("replies with a failure when Google confirms KPLUS with another amount", () => {
-    const inspection = inspectConfirmedReceiptText("CHANNEL: KPLUS\nAMT: THB 5.00");
+    const inspection = inspectConfirmedReceiptText("CHANNEL: KPLUS\nSETTLEMENT\nAMT: THB 5.00");
 
     expect(shouldReplyAfterGoogleVision(inspection)).toBe(true);
     expect(decideReceipt(inspection, 1.22, -1.22, 0.65).status).toBe("fail");
@@ -172,5 +176,15 @@ describe("receipt decision", () => {
     const inspection = inspectConfirmedReceiptText("OTHER RECEIPT\nAMT: THB 1.22");
 
     expect(shouldReplyAfterGoogleVision(inspection)).toBe(false);
+  });
+
+  it("fails when SETTLEMENT is missing even if KPLUS and 1.22 are readable", () => {
+    const inspection = inspectReceiptText("CHANNEL: KPLUS\nAMT: THB 1.22");
+    const decision = decideReceipt(inspection, 1.22, -1.22, 0.65);
+
+    expect(hasSettlementText("settlement successful")).toBe(true);
+    expect(inspection.hasSettlement).toBe(false);
+    expect(decision.status).toBe("fail");
+    expect(decision.failures).toContain("ไม่พบคำว่า SETTLEMENT");
   });
 });

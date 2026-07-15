@@ -13,7 +13,7 @@ Cloudflare Worker สำหรับรับรูปจาก LINE Messaging A
 - `1.22 บาท`
 - `-1.22 บาท`
 
-คำที่ใช้เป็นหลักฐานประกอบ ได้แก่ `K+`, `KPLUS`, `THAIQR`, `Thai QR Payment` และ `QR PAYMENT` โดยไม่บังคับว่าต้องมี SALE, VOID และ SETTLEMENT ครบพร้อมกัน
+คำที่ใช้เป็นหลักฐานประกอบ ได้แก่ `K+`, `KPLUS`, `THAIQR`, `Thai QR Payment` และ `QR PAYMENT` โดยไม่บังคับว่าต้องมี SALE หรือ VOID แต่ผล “ผ่าน” ต้องพบคำว่า `SETTLEMENT` และยอด `1.22` หรือ `-1.22` ด้วย
 
 ลำดับ OCR ปัจจุบันคือ:
 

@@ -41,6 +41,7 @@ describe("33-image labeled receipt dataset", () => {
   it.each(evaluatedReceipts)("keeps %s classified as %s", (_name, expected, amounts) => {
     const decision = decideReceipt({
       isKplusReceipt: true,
+      hasSettlement: true,
       observedAmounts: [...amounts],
       confidence: 0.99,
       reason: "Google Vision evaluation fixture",
