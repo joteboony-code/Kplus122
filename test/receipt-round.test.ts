@@ -193,7 +193,30 @@ describe("receipt round state", () => {
     expect((await finalizeRound(finalizer!, state, 20_001)).status).toBe("busy");
     await releaseRoundFinalization(finalizer!, state);
     expect((await finalizeRound(finalizer!, state, 20_002)).status).toBe("finalized");
-    await completeRoundFinalization(finalizer!, state, 20_003);
+    await completeRoundFinalization(finalizer!, state);
     expect(await finalizeRound(finalizer!, state, 20_004)).toEqual({ status: "stale" });
+  });
+
+  it("accepts a corrected pass immediately after a failed round was delivered", async () => {
+    const state = memoryState();
+    const finalizer = await recordRoundActivity(
+      job("wrong"),
+      { kind: "wrong-amount", text: "wrong", job: job("wrong") },
+      state,
+      0,
+      "failed-generation",
+    );
+
+    expect((await finalizeRound(finalizer!, state, 20_000)).status).toBe("finalized");
+    await completeRoundFinalization(finalizer!, state);
+
+    expect(await claimRoundPass(job("correct"), state, 20_001)).toBe("acquired");
+  });
+
+  it("keeps suppressing another pass after a successful pass", async () => {
+    const state = memoryState();
+    await completeRoundAfterPass(job("first-pass"), state, 20_000);
+
+    expect(await claimRoundPass(job("second-pass"), state, 20_001)).toBe("suppressed");
   });
 });

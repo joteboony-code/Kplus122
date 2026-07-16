@@ -250,13 +250,8 @@ export async function releaseRoundFinalization(
 export async function completeRoundFinalization(
   job: RoundFinalizeJob,
   state: StateStore,
-  now = Date.now(),
 ): Promise<void> {
   const current = parseRoundState(await state.get(job.roundKey));
   if (!current || current.generation !== job.generation) return;
-  await state.put(job.roundKey, JSON.stringify({
-    ...current,
-    completedAt: now,
-    finalizationClaimedAt: undefined,
-  }), { expirationTtl: ROUND_STATE_TTL_SECONDS });
+  await state.delete(job.roundKey);
 }
