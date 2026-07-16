@@ -566,18 +566,6 @@ async function processImageJob(
       visualKplusCandidate,
       googleVisionUsage,
     }));
-    if (inspection.isKplusReceipt) {
-      return {
-        outcome: "fail",
-        evidence: {
-          kind: "uncertain",
-          text: formatDecision(inspection, {
-            status: "uncertain",
-            failures: ["ข้อมูล KPLUS ไม่ชัดเจน"],
-          }),
-        },
-      };
-    }
     return IGNORED_RESULT;
   }
 

@@ -245,6 +245,16 @@ describe("receipt decision", () => {
     expect(shouldReplyAfterGoogleVision(inspection)).toBe(false);
   });
 
+  it("stays silent when KPLUS is visible without SETTLEMENT", () => {
+    const inspection = inspectConfirmedReceiptText(
+      "CHANNEL: KPLUS\nSALE Thai QR Payment\nAMT: THB 540.00",
+    );
+
+    expect(inspection.isKplusReceipt).toBe(true);
+    expect(inspection.hasSettlement).toBe(false);
+    expect(shouldReplyAfterGoogleVision(inspection)).toBe(false);
+  });
+
   it("fails when SETTLEMENT is missing even if KPLUS and 1.22 are readable", () => {
     const inspection = inspectReceiptText("CHANNEL: KPLUS\nAMT: THB 1.22");
     const decision = decideReceipt(inspection, 1.22, -1.22, 0.65);
