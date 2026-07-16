@@ -160,6 +160,8 @@ describe("processing control", () => {
     expect(page).toContain("อัปเดตล่าสุด");
     expect(page).toContain("เวอร์ชัน 12345678");
     expect(page).toContain("บริการทั้งหมดทำงานปกติ");
+    expect(page).toContain("@media(max-width:900px)");
+    expect(page).toContain("grid-column:1/-1;display:flex");
   });
 
   it("lets an authenticated operator disable processing", async () => {
