@@ -209,7 +209,8 @@ describe("processing control", () => {
       env,
     );
     const page = await control?.text();
-    expect(page).toContain('class="log-card pass"');
+    expect(page).toContain('class="log-row pass"');
+    expect(page).toContain('<summary>รายละเอียด</summary>');
     expect(page).toContain('class="evidence-chip found"><i>✓</i>พบ KPLUS');
     expect(page).toContain('class="evidence-chip found"><i>✓</i>พบ SETTLEMENT');
     expect(page).toContain('class="amount-value">1.22,-1.22');
