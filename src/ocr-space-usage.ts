@@ -1,5 +1,10 @@
+import type {
+  CounterIncrementResult,
+  OperationalCounterNamespace,
+} from "./operational-counters";
+
 const OCR_SPACE_DAILY_LIMIT = 500;
-const USAGE_KEY_PREFIX = "ocr-space:usage:";
+const COUNTER_NAME = "usage";
 
 function bangkokDate(now: Date): string {
   const parts = new Intl.DateTimeFormat("en-US", {
@@ -13,41 +18,40 @@ function bangkokDate(now: Date): string {
   return `${value("year")}-${value("month")}-${value("day")}`;
 }
 
-function usageKey(now: Date): string {
-  return `${USAGE_KEY_PREFIX}${bangkokDate(now)}`;
+function counterId(now: Date): string {
+  return `ocr-space:${bangkokDate(now)}`;
 }
 
 export async function getOcrSpaceUsage(
-  kv: KVNamespace,
+  counters: OperationalCounterNamespace,
   now = new Date(),
 ): Promise<number> {
-  const stored = Number(await kv.get(usageKey(now)) ?? "0");
-  return Number.isInteger(stored) && stored >= 0 ? stored : 0;
+  return counters.getByName(counterId(now)).get(COUNTER_NAME);
 }
 
 export async function hasOcrSpaceCapacity(
-  kv: KVNamespace,
+  counters: OperationalCounterNamespace,
   now = new Date(),
 ): Promise<boolean> {
-  return (await getOcrSpaceUsage(kv, now)) < OCR_SPACE_DAILY_LIMIT;
+  return (await getOcrSpaceUsage(counters, now)) < OCR_SPACE_DAILY_LIMIT;
 }
 
-export async function recordOcrSpaceRequest(
-  kv: KVNamespace,
+export async function reserveOcrSpaceRequest(
+  counters: OperationalCounterNamespace,
   now = new Date(),
-): Promise<number> {
-  const next = Math.min((await getOcrSpaceUsage(kv, now)) + 1, OCR_SPACE_DAILY_LIMIT);
-  await kv.put(usageKey(now), String(next), { expirationTtl: 3 * 24 * 60 * 60 });
-  return next;
+): Promise<CounterIncrementResult> {
+  return counters
+    .getByName(counterId(now))
+    .increment(COUNTER_NAME, OCR_SPACE_DAILY_LIMIT);
 }
 
 export async function markOcrSpaceQuotaExhausted(
-  kv: KVNamespace,
+  counters: OperationalCounterNamespace,
   now = new Date(),
 ): Promise<void> {
-  await kv.put(usageKey(now), String(OCR_SPACE_DAILY_LIMIT), {
-    expirationTtl: 3 * 24 * 60 * 60,
-  });
+  await counters
+    .getByName(counterId(now))
+    .setAtLeast(COUNTER_NAME, OCR_SPACE_DAILY_LIMIT);
 }
 
 export { OCR_SPACE_DAILY_LIMIT };

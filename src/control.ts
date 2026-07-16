@@ -354,7 +354,7 @@ export async function handleControlRequest(
   request: Request,
   env: Pick<
     Env,
-    "CONTROL_PASSWORD" | "CONTROL_DB" | "REPLY_STATE" | "OCR_SPACE_API_KEY" | "GOOGLE_VISION_API_KEY" | "PROCESSING_FORCE_DISABLED"
+    "CONTROL_PASSWORD" | "CONTROL_DB" | "OPERATIONAL_COUNTERS" | "OCR_SPACE_API_KEY" | "GOOGLE_VISION_API_KEY" | "PROCESSING_FORCE_DISABLED"
   >,
 ): Promise<Response | null> {
   const url = new URL(request.url);
@@ -388,9 +388,9 @@ export async function handleControlRequest(
         env.CONTROL_DB,
         String(env.PROCESSING_FORCE_DISABLED) === "true",
       ),
-      getOcrSpaceUsage(env.REPLY_STATE),
-      getGoogleVisionUsage(env.REPLY_STATE),
-      getDailyStats(env.REPLY_STATE),
+      getOcrSpaceUsage(env.OPERATIONAL_COUNTERS),
+      getGoogleVisionUsage(env.OPERATIONAL_COUNTERS),
+      getDailyStats(env.OPERATIONAL_COUNTERS),
       safeInspectionLogs(env.CONTROL_DB),
     ]);
     return htmlResponse(controlPage(enabled, {

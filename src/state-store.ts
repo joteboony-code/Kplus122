@@ -40,3 +40,15 @@ export function d1StateStore(db: D1Database): StateStore {
     },
   };
 }
+
+export async function purgeExpiredState(
+  db: D1Database,
+  nowSeconds = Math.floor(Date.now() / 1000),
+): Promise<number> {
+  const result = await db
+    .prepare(`DELETE FROM control_state
+      WHERE expires_at IS NOT NULL AND expires_at <= ?`)
+    .bind(nowSeconds)
+    .run();
+  return result.meta.changes;
+}

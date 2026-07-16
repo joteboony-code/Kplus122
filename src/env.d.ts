@@ -5,5 +5,8 @@ interface Env {
   OCR_SPACE_API_KEY?: string;
   CONTROL_PASSWORD: string;
   CONTROL_DB: D1Database;
+  OPERATIONAL_COUNTERS: DurableObjectNamespace<
+    import("./operational-counters").OperationalCounterCoordinator
+  >;
   PROCESSING_FORCE_DISABLED?: string;
 }

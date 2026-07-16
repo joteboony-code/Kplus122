@@ -8,12 +8,6 @@
     "binding": "AI",
     "remote": true
   },
-  "kv_namespaces": [
-    {
-      "binding": "REPLY_STATE",
-      "id": "b9273896beec42ccb2f75a1286f4c037"
-    }
-  ],
   "d1_databases": [
     {
       "binding": "CONTROL_DB",
@@ -26,6 +20,10 @@
       {
         "name": "RECEIPT_ROUNDS",
         "class_name": "ReceiptRoundCoordinator"
+      },
+      {
+        "name": "OPERATIONAL_COUNTERS",
+        "class_name": "OperationalCounterCoordinator"
       }
     ]
   },
@@ -33,8 +31,15 @@
     {
       "tag": "v1",
       "new_sqlite_classes": ["ReceiptRoundCoordinator"]
+    },
+    {
+      "tag": "v2",
+      "new_sqlite_classes": ["OperationalCounterCoordinator"]
     }
   ],
+  "triggers": {
+    "crons": ["0 18 * * *"]
+  },
   "queues": {
     "producers": [
       {

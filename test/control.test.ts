@@ -1,17 +1,10 @@
 import { describe, expect, it } from "vitest";
+import { env as workerEnv } from "cloudflare:test";
 import {
   handleControlRequest,
   isProcessingEnabled,
   setProcessingEnabled,
 } from "../src/control";
-
-function memoryKv(): KVNamespace {
-  const values = new Map<string, string>();
-  return {
-    get: async (key: string) => values.get(key) ?? null,
-    put: async (key: string, value: string) => { values.set(key, value); },
-  } as KVNamespace;
-}
 
 function memoryControlDb(): D1Database {
   const values = new Map<string, string>();
@@ -92,11 +85,10 @@ describe("processing control", () => {
   });
 
   it("requires the configured password and creates an authenticated session", async () => {
-    const kv = memoryKv();
     const env = {
       CONTROL_PASSWORD: "strong-test-password",
       CONTROL_DB: memoryControlDb(),
-      REPLY_STATE: kv,
+      OPERATIONAL_COUNTERS: workerEnv.OPERATIONAL_COUNTERS,
     };
 
     const anonymous = await handleControlRequest(
@@ -157,12 +149,11 @@ describe("processing control", () => {
   });
 
   it("lets an authenticated operator disable processing", async () => {
-    const kv = memoryKv();
     const controlDb = memoryControlDb();
     const env = {
       CONTROL_PASSWORD: "strong-test-password",
       CONTROL_DB: controlDb,
-      REPLY_STATE: kv,
+      OPERATIONAL_COUNTERS: workerEnv.OPERATIONAL_COUNTERS,
     };
     const login = await handleControlRequest(
       new Request("https://example.com/control/login", {
@@ -197,7 +188,7 @@ describe("processing control", () => {
     const env = {
       CONTROL_PASSWORD: "strong-test-password",
       CONTROL_DB: controlDbWithLog(),
-      REPLY_STATE: memoryKv(),
+      OPERATIONAL_COUNTERS: workerEnv.OPERATIONAL_COUNTERS,
     };
     const login = await handleControlRequest(
       new Request("https://example.com/control/login", {
@@ -229,7 +220,7 @@ describe("processing control", () => {
     const env = {
       CONTROL_PASSWORD: "strong-test-password",
       CONTROL_DB: memoryControlDb(),
-      REPLY_STATE: memoryKv(),
+      OPERATIONAL_COUNTERS: workerEnv.OPERATIONAL_COUNTERS,
     };
     const login = await handleControlRequest(
       new Request("https://example.com/control/login", {

@@ -43,6 +43,7 @@ describe("33-image labeled receipt dataset", () => {
       isKplusReceipt: true,
       hasSettlement: true,
       observedAmounts: [...amounts],
+      labeledAmounts: [...amounts],
       confidence: 0.99,
       reason: "Google Vision evaluation fixture",
     }, 1.22, -1.22, 0.65);

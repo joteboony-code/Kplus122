@@ -196,7 +196,7 @@ export async function sendInspectionResult(
   text: string,
   channelAccessToken: string,
   enablePushFallback: boolean,
-): Promise<void> {
+): Promise<boolean> {
   const message = inspectionMessage(job, text);
 
   const replied = await postLineMessage(
@@ -208,12 +208,14 @@ export async function sendInspectionResult(
     },
   );
 
-  if (!replied && enablePushFallback && job.replyTarget) {
-    await postLineMessage("/v2/bot/message/push", channelAccessToken, {
+  if (replied) return true;
+  if (enablePushFallback && job.replyTarget) {
+    return postLineMessage("/v2/bot/message/push", channelAccessToken, {
       to: job.replyTarget,
       messages: [message],
     });
   }
+  return false;
 }
 
 export async function sendInspectionPushResult(

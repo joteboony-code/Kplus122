@@ -89,3 +89,13 @@ export async function listInspectionLogs(
 export async function clearInspectionLogs(db: D1Database): Promise<void> {
   await db.prepare("DELETE FROM inspection_logs").run();
 }
+
+export async function purgeExpiredInspectionLogs(
+  db: D1Database,
+): Promise<number> {
+  const result = await db
+    .prepare("DELETE FROM inspection_logs WHERE created_at < unixepoch() - ?")
+    .bind(AUDIT_RETENTION_SECONDS)
+    .run();
+  return result.meta.changes;
+}

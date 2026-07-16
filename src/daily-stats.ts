@@ -1,3 +1,5 @@
+import type { OperationalCounterNamespace } from "./operational-counters";
+
 export interface DailyStats {
   received: number;
   processed: number;
@@ -47,17 +49,17 @@ function bangkokDate(now: Date): string {
   return `${value("year")}-${value("month")}-${value("day")}`;
 }
 
-function statsKey(now: Date): string {
+function counterId(now: Date): string {
   return `${STATS_KEY_PREFIX}${bangkokDate(now)}`;
 }
 
 export async function getDailyStats(
-  kv: KVNamespace,
+  counters: OperationalCounterNamespace,
   now = new Date(),
 ): Promise<DailyStats> {
-  const stored = await kv.get<Partial<DailyStats>>(statsKey(now), "json");
   const result = { ...EMPTY_STATS };
-  if (!stored) return result;
+  const names = Object.keys(result) as DailyStatName[];
+  const stored = await counters.getByName(counterId(now)).getMany(names);
   for (const name of Object.keys(result) as DailyStatName[]) {
     const value = stored[name];
     if (Number.isInteger(value) && (value ?? -1) >= 0) result[name] = value ?? 0;
@@ -66,14 +68,10 @@ export async function getDailyStats(
 }
 
 export async function incrementDailyStat(
-  kv: KVNamespace,
+  counters: OperationalCounterNamespace,
   name: DailyStatName,
   now = new Date(),
 ): Promise<number> {
-  const stats = await getDailyStats(kv, now);
-  stats[name] += 1;
-  await kv.put(statsKey(now), JSON.stringify(stats), {
-    expirationTtl: 3 * 24 * 60 * 60,
-  });
-  return stats[name];
+  const result = await counters.getByName(counterId(now)).increment(name);
+  return result.value;
 }

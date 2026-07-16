@@ -61,6 +61,7 @@ export interface ReceiptInspection {
   isKplusReceipt: boolean;
   hasSettlement: boolean;
   observedAmounts: number[];
+  labeledAmounts: number[];
   confidence: number;
   reason: string;
 }

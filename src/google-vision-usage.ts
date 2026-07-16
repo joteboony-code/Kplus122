@@ -1,5 +1,10 @@
+import type {
+  CounterIncrementResult,
+  OperationalCounterNamespace,
+} from "./operational-counters";
+
 export const GOOGLE_VISION_FREE_MONTHLY_UNITS = 1_000;
-const USAGE_KEY_PREFIX = "google-vision:usage:";
+const COUNTER_NAME = "usage";
 
 function bangkokMonth(now: Date): string {
   const parts = new Intl.DateTimeFormat("en-US", {
@@ -12,32 +17,29 @@ function bangkokMonth(now: Date): string {
   return `${value("year")}-${value("month")}`;
 }
 
-function usageKey(now: Date): string {
-  return `${USAGE_KEY_PREFIX}${bangkokMonth(now)}`;
+function counterId(now: Date): string {
+  return `google-vision:${bangkokMonth(now)}`;
 }
 
 export async function getGoogleVisionUsage(
-  kv: KVNamespace,
+  counters: OperationalCounterNamespace,
   now = new Date(),
 ): Promise<number> {
-  const stored = Number(await kv.get(usageKey(now)) ?? "0");
-  return Number.isInteger(stored) && stored >= 0 ? stored : 0;
+  return counters.getByName(counterId(now)).get(COUNTER_NAME);
 }
 
 export async function hasGoogleVisionCapacity(
-  kv: KVNamespace,
+  counters: OperationalCounterNamespace,
   now = new Date(),
 ): Promise<boolean> {
-  return (await getGoogleVisionUsage(kv, now)) < GOOGLE_VISION_FREE_MONTHLY_UNITS;
+  return (await getGoogleVisionUsage(counters, now)) < GOOGLE_VISION_FREE_MONTHLY_UNITS;
 }
 
-export async function recordGoogleVisionRequest(
-  kv: KVNamespace,
+export async function reserveGoogleVisionRequest(
+  counters: OperationalCounterNamespace,
   now = new Date(),
-): Promise<number> {
-  const next = (await getGoogleVisionUsage(kv, now)) + 1;
-  await kv.put(usageKey(now), String(next), {
-    expirationTtl: 62 * 24 * 60 * 60,
-  });
-  return next;
+): Promise<CounterIncrementResult> {
+  return counters
+    .getByName(counterId(now))
+    .increment(COUNTER_NAME, GOOGLE_VISION_FREE_MONTHLY_UNITS);
 }

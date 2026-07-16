@@ -14,18 +14,17 @@ import {
 } from "./analyze";
 import { googleVisionOcr } from "./google-vision";
 import {
-  hasGoogleVisionCapacity,
-  recordGoogleVisionRequest,
+  reserveGoogleVisionRequest,
 } from "./google-vision-usage";
 import { incrementDailyStat, type DailyStatName } from "./daily-stats";
 import { ocrSpaceOcr } from "./ocr-space";
 import {
-  hasOcrSpaceCapacity,
   markOcrSpaceQuotaExhausted,
-  recordOcrSpaceRequest,
+  reserveOcrSpaceRequest,
 } from "./ocr-space-usage";
 import { handleControlRequest, isProcessingEnabled } from "./control";
 import {
+  purgeExpiredInspectionLogs,
   recordInspectionLog,
   type InspectionTrace,
 } from "./audit-log";
@@ -47,7 +46,8 @@ import {
   type RoundEvidence,
 } from "./receipt-round";
 export { ReceiptRoundCoordinator } from "./receipt-round-coordinator";
-import { d1StateStore } from "./state-store";
+export { OperationalCounterCoordinator } from "./operational-counters";
+import { d1StateStore, purgeExpiredState } from "./state-store";
 import {
   isRoundFinalizeJob,
   type ImageJob,
@@ -92,7 +92,7 @@ function updateTraceFromInspection(
 
 async function recordStat(env: Env, name: DailyStatName): Promise<void> {
   try {
-    await incrementDailyStat(env.REPLY_STATE, name);
+    await incrementDailyStat(env.OPERATIONAL_COUNTERS, name);
   } catch (error) {
     console.warn(JSON.stringify({
       event: "daily_stat_record_failed",
@@ -133,13 +133,48 @@ async function replyKplusSuccess(
   provider: string,
   env: Env,
 ): Promise<ProcessResult> {
-  await sendInspectionResult(
-    job,
-    formatKplusSuccess(amount),
-    env.LINE_CHANNEL_ACCESS_TOKEN,
-    String(env.ENABLE_PUSH_FALLBACK) === "true",
-  );
-  await recordRecentPass(job, d1StateStore(env.CONTROL_DB));
+  const roundKey = receiptRoundKey(job);
+  if (roundKey) {
+    const claim = await env.RECEIPT_ROUNDS.getByName(roundKey).claimPass(job);
+    if (claim === "suppressed") return IGNORED_RESULT;
+    if (claim === "busy") throw new Error("Pass delivery is already in progress");
+  }
+
+  let sent = false;
+  try {
+    sent = await sendInspectionResult(
+      job,
+      formatKplusSuccess(amount),
+      env.LINE_CHANNEL_ACCESS_TOKEN,
+      String(env.ENABLE_PUSH_FALLBACK) === "true",
+    );
+    if (!sent) throw new Error("LINE inspection result delivery failed");
+  } catch (error) {
+    if (roundKey) {
+      await env.RECEIPT_ROUNDS.getByName(roundKey).releasePass(job);
+    }
+    throw error;
+  }
+  if (roundKey) {
+    try {
+      await env.RECEIPT_ROUNDS.getByName(roundKey).completeAfterPass(job);
+    } catch (error) {
+      console.error(JSON.stringify({
+        event: "pass_completion_record_failed",
+        messageId: job.messageId,
+        error: error instanceof Error ? error.message : "unknown error",
+      }));
+    }
+  }
+  try {
+    await recordRecentPass(job, d1StateStore(env.CONTROL_DB));
+  } catch (error) {
+    console.warn(JSON.stringify({
+      event: "recent_pass_record_failed",
+      messageId: job.messageId,
+      error: error instanceof Error ? error.message : "unknown error",
+    }));
+  }
 
   console.log(JSON.stringify({
     event: "kplus_receipt_passed",
@@ -240,8 +275,11 @@ async function processImageJob(
 
   const original = await downloadLineImage(job.messageId, env.LINE_CHANNEL_ACCESS_TOKEN);
 
-  if (env.OCR_SPACE_API_KEY && await hasOcrSpaceCapacity(env.REPLY_STATE)) {
-    let ocrSpaceUsage = 0;
+  const ocrSpaceReservation = env.OCR_SPACE_API_KEY
+    ? await reserveOcrSpaceRequest(env.OPERATIONAL_COUNTERS)
+    : null;
+  if (env.OCR_SPACE_API_KEY && ocrSpaceReservation?.accepted) {
+    let ocrSpaceUsage = ocrSpaceReservation.value;
     let ocrSpaceResult: Awaited<ReturnType<typeof ocrSpaceOcr>> | null = null;
     try {
       await recordStat(env, "ocrSpaceCalls");
@@ -261,19 +299,10 @@ async function processImageJob(
     }
 
     if (ocrSpaceResult) {
-      try {
-        ocrSpaceUsage = await recordOcrSpaceRequest(env.REPLY_STATE);
-      } catch (error) {
-        console.warn(JSON.stringify({
-          event: "ocr_space_usage_record_failed",
-          webhookEventId: job.webhookEventId,
-          error: error instanceof Error ? error.message : "unknown error",
-        }));
-      }
       if (ocrSpaceResult.status === "quota-exhausted") {
         await recordStat(env, "ocrSpaceErrors");
         try {
-          await markOcrSpaceQuotaExhausted(env.REPLY_STATE);
+          await markOcrSpaceQuotaExhausted(env.OPERATIONAL_COUNTERS);
         } catch (error) {
           console.warn(JSON.stringify({
             event: "ocr_space_quota_marker_failed",
@@ -484,7 +513,10 @@ async function processImageJob(
     throw new Error("GOOGLE_VISION_API_KEY is required for fallback inspection");
   }
 
-  if (!(await hasGoogleVisionCapacity(env.REPLY_STATE))) {
+  const googleVisionReservation = await reserveGoogleVisionRequest(
+    env.OPERATIONAL_COUNTERS,
+  );
+  if (!googleVisionReservation.accepted) {
     await recordStat(env, "googleVisionCapSkips");
     console.warn(JSON.stringify({
       event: "image_ignored",
@@ -506,16 +538,7 @@ async function processImageJob(
     await recordStat(env, "googleVisionErrors");
     throw error;
   }
-  let googleVisionUsage: number | null = null;
-  try {
-    googleVisionUsage = await recordGoogleVisionRequest(env.REPLY_STATE);
-  } catch (error) {
-    console.warn(JSON.stringify({
-      event: "google_vision_usage_record_failed",
-      webhookEventId: job.webhookEventId,
-      error: error instanceof Error ? error.message : "unknown error",
-    }));
-  }
+  const googleVisionUsage = googleVisionReservation.value;
   const inspection = inspectConfirmedReceiptText(receiptText);
   const decision = decideReceipt(
     inspection,
@@ -618,7 +641,7 @@ async function processRoundFinalizer(
   env: Env,
 ): Promise<void> {
   const result = await env.RECEIPT_ROUNDS.getByName(job.roundKey).finalize(job);
-  if (result.status === "waiting") {
+  if (result.status === "waiting" || result.status === "busy") {
     await env.IMAGE_QUEUE.send(job, {
       delaySeconds: result.retryAfterSeconds ?? ROUND_INACTIVITY_SECONDS,
     });
@@ -626,19 +649,19 @@ async function processRoundFinalizer(
   }
   if (result.status !== "finalized") return;
 
-  if (result.evidence) {
-    const sent = await sendInspectionPushResult(
-      result.evidence.job,
-      result.evidence.text,
-      env.LINE_CHANNEL_ACCESS_TOKEN,
-    );
-    if (!sent) {
-      console.error(JSON.stringify({
-        event: "receipt_round_summary_failed",
-        roundKey: job.roundKey,
-        evidenceKind: result.evidence.kind,
-      }));
+  try {
+    if (result.evidence) {
+      const sent = await sendInspectionPushResult(
+        result.evidence.job,
+        result.evidence.text,
+        env.LINE_CHANNEL_ACCESS_TOKEN,
+      );
+      if (!sent) throw new Error("LINE round summary delivery failed");
     }
+    await env.RECEIPT_ROUNDS.getByName(job.roundKey).completeFinalization(job);
+  } catch (error) {
+    await env.RECEIPT_ROUNDS.getByName(job.roundKey).releaseFinalization(job);
+    throw error;
   }
   console.log(JSON.stringify({
     event: "receipt_round_finalized",
@@ -721,11 +744,7 @@ export default {
 
         const result = await processImageJob(job, env, trace);
         const roundKey = receiptRoundKey(job);
-        if (result.outcome === "pass") {
-          if (roundKey) {
-            await env.RECEIPT_ROUNDS.getByName(roundKey).completeAfterPass(job);
-          }
-        } else {
+        if (result.outcome !== "pass") {
           const finalizer = roundKey
             ? await env.RECEIPT_ROUNDS.getByName(roundKey).recordActivity(
                 job,
@@ -738,12 +757,13 @@ export default {
               delaySeconds: ROUND_INACTIVITY_SECONDS,
             });
           } else if (!roundKey && result.evidence) {
-            await sendInspectionResult(
+            const sent = await sendInspectionResult(
               job,
               result.evidence.text,
               env.LINE_CHANNEL_ACCESS_TOKEN,
               String(env.ENABLE_PUSH_FALLBACK) === "true",
             );
+            if (!sent) throw new Error("LINE inspection result delivery failed");
           }
         }
         try {
@@ -787,5 +807,16 @@ export default {
         message.retry({ delaySeconds: 30 });
       }
     }
+  },
+  async scheduled(_controller, env): Promise<void> {
+    const [stateRows, inspectionRows] = await Promise.all([
+      purgeExpiredState(env.CONTROL_DB),
+      purgeExpiredInspectionLogs(env.CONTROL_DB),
+    ]);
+    console.log(JSON.stringify({
+      event: "daily_cleanup_completed",
+      stateRows,
+      inspectionRows,
+    }));
   },
 } satisfies ExportedHandler<Env, QueueJob>;

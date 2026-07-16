@@ -1,8 +1,12 @@
 import { DurableObject } from "cloudflare:workers";
 import {
+  claimRoundPass,
+  completeRoundFinalization,
   completeRoundAfterPass,
   finalizeRound,
   recordRoundActivity,
+  releaseRoundFinalization,
+  releaseRoundPass,
   type RoundEvidence,
   type RoundFinalization,
 } from "./receipt-round";
@@ -45,8 +49,29 @@ export class ReceiptRoundCoordinator extends DurableObject<Env> {
       completeRoundAfterPass(job, this.transactionState(transaction)));
   }
 
+  async claimPass(job: ImageJob) {
+    return this.ctx.storage.transaction((transaction) =>
+      claimRoundPass(job, this.transactionState(transaction)));
+  }
+
+  async releasePass(job: ImageJob): Promise<void> {
+    await this.ctx.storage.transaction((transaction) =>
+      releaseRoundPass(job, this.transactionState(transaction)));
+  }
+
   async finalize(job: RoundFinalizeJob): Promise<RoundFinalization> {
     return this.ctx.storage.transaction((transaction) =>
       finalizeRound(job, this.transactionState(transaction)));
+  }
+
+
+  async releaseFinalization(job: RoundFinalizeJob): Promise<void> {
+    await this.ctx.storage.transaction((transaction) =>
+      releaseRoundFinalization(job, this.transactionState(transaction)));
+  }
+
+  async completeFinalization(job: RoundFinalizeJob): Promise<void> {
+    await this.ctx.storage.transaction((transaction) =>
+      completeRoundFinalization(job, this.transactionState(transaction)));
   }
 }

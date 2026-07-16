@@ -69,6 +69,16 @@ function normalizeOcrText(text: string): string {
     .trim();
 }
 
+function normalizeOcrLines(text: string): string[] {
+  return text
+    .toUpperCase()
+    .replace(/\r\n?/g, "\n")
+    .replace(/[\u2010-\u2015\u2212]/g, "-")
+    .split("\n")
+    .map((line) => line.replace(/[\t ]+/g, " ").trim())
+    .filter(Boolean);
+}
+
 export function isKplusCandidateText(text: string): boolean {
   const normalized = normalizeOcrText(text);
   return (
@@ -116,9 +126,27 @@ export function acceptWorkerPaymentName(
 }
 
 function amountsFromText(normalized: string): number[] {
-  const values = [...normalized.matchAll(/(?:THB\s*)?(-?\d+[.]\d{2})\b/g)]
-    .map((match) => Number(match[1]))
+  const values = [...normalized.matchAll(/(?:THB\s*)?(-?\d+[.,]\d{2})\b/g)]
+    .map((match) => Number(match[1].replace(",", ".")))
     .filter(Number.isFinite);
+  return [...new Set(values)];
+}
+
+function amountsFromLabeledText(text: string): number[] {
+  const lines = normalizeOcrLines(text);
+  const values: number[] = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    if (!/\b(?:AMT|AMOUNT)\b/.test(lines[index])) continue;
+    const window = lines.slice(index, index + 3).join(" ");
+    for (const match of window.matchAll(
+      /\b(?:AMT|AMOUNT)\b\s*:?\s*(?:([-]?)\s*THB\s*([-]?)\s*)?(-?\d+[.,]\d{2})(?:\s*THB\b)?/g,
+    )) {
+      const numeric = Number(match[3].replace(",", "."));
+      if (!Number.isFinite(numeric)) continue;
+      const negative = match[1] === "-" || match[2] === "-" || numeric < 0;
+      values.push(negative ? -Math.abs(numeric) : numeric);
+    }
+  }
   return [...new Set(values)];
 }
 
@@ -127,13 +155,15 @@ export function inspectReceiptText(text: string): ReceiptInspection {
   const isKplusReceipt = isKplusCandidateText(normalized);
   const hasSettlement = hasSettlementText(normalized);
   const observedAmounts = amountsFromText(normalized);
+  const labeledAmounts = amountsFromLabeledText(text);
 
   return {
     isKplusReceipt,
     hasSettlement,
     observedAmounts,
+    labeledAmounts,
     confidence: isKplusReceipt && observedAmounts.length > 0 ? 0.99 : isKplusReceipt ? 0.8 : 0.2,
-    reason: `brand=${isKplusReceipt}; settlement=${hasSettlement}; amounts=${observedAmounts.join(",") || "none"}`,
+    reason: `brand=${isKplusReceipt}; settlement=${hasSettlement}; amounts=${observedAmounts.join(",") || "none"}; labeledAmounts=${labeledAmounts.join(",") || "none"}`,
   };
 }
 
@@ -142,13 +172,15 @@ export function inspectConfirmedReceiptText(text: string): ReceiptInspection {
   const isKplusReceipt = isConfirmedKplusReceiptText(normalized);
   const hasSettlement = hasSettlementText(normalized);
   const observedAmounts = amountsFromText(normalized);
+  const labeledAmounts = amountsFromLabeledText(text);
 
   return {
     isKplusReceipt,
     hasSettlement,
     observedAmounts,
+    labeledAmounts,
     confidence: isKplusReceipt && observedAmounts.length > 0 ? 0.99 : isKplusReceipt ? 0.8 : 0.2,
-    reason: `confirmedBrand=${isKplusReceipt}; settlement=${hasSettlement}; amounts=${observedAmounts.join(",") || "none"}`,
+    reason: `confirmedBrand=${isKplusReceipt}; settlement=${hasSettlement}; amounts=${observedAmounts.join(",") || "none"}; labeledAmounts=${labeledAmounts.join(",") || "none"}`,
   };
 }
 
@@ -162,6 +194,16 @@ export function hasExpectedAmount(
   expectedVoid: number,
 ): boolean {
   return inspection.observedAmounts.some(
+    (amount) => amountsEqual(amount, expectedSale) || amountsEqual(amount, expectedVoid),
+  );
+}
+
+export function hasExpectedLabeledAmount(
+  inspection: ReceiptInspection,
+  expectedSale: number,
+  expectedVoid: number,
+): boolean {
+  return inspection.labeledAmounts.some(
     (amount) => amountsEqual(amount, expectedSale) || amountsEqual(amount, expectedVoid),
   );
 }
@@ -193,7 +235,11 @@ export function decideReceipt(
   if (!inspection.hasSettlement) {
     failures.push("ไม่พบคำว่า SETTLEMENT");
   }
-  const hasAllowedAmount = hasExpectedAmount(inspection, expectedSale, expectedVoid);
+  const hasAllowedAmount = hasExpectedAmount(
+    inspection,
+    expectedSale,
+    expectedVoid,
+  );
   if (!hasAllowedAmount) {
     failures.push(
       `ไม่พบยอด ${expectedSale.toFixed(2)} หรือ ${expectedVoid.toFixed(2)} บาท`,
@@ -229,14 +275,17 @@ export function formatDecision(
     return "⚠️ ตรวจสอบไม่สำเร็จ: พบหลักฐาน KPLUS แต่ข้อมูลไม่ชัดเจน กรุณาถ่ายใหม่ให้เห็น KPLUS, SETTLEMENT และยอดเงินครบถ้วน";
   }
 
+  const displayAmounts = inspection.labeledAmounts.length > 0
+    ? inspection.labeledAmounts
+    : inspection.observedAmounts;
   const lines = [
     "❌ ตรวจสอบไม่ผ่าน: สลิป KPLUS",
-    `ยอดที่อ่านได้: ${inspection.observedAmounts.length > 0 ? `${inspection.observedAmounts.map((amount) => amount.toFixed(2)).join(", ")} บาท` : "อ่านยอดไม่ได้"}`,
+    `ยอดที่อ่านได้: ${displayAmounts.length > 0 ? `${displayAmounts.map((amount) => amount.toFixed(2)).join(", ")} บาท` : "อ่านยอดไม่ได้"}`,
     `สาเหตุ: ${decision.failures.join(", ")}`,
   ];
   const hasWrongReadableAmount =
-    inspection.observedAmounts.length > 0 &&
-    !inspection.observedAmounts.some(
+    displayAmounts.length > 0 &&
+    !displayAmounts.some(
       (amount) => Math.abs(Math.abs(amount) - 1.22) < 0.005,
     );
   if (hasWrongReadableAmount) {

@@ -1,21 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { env } from "cloudflare:test";
 import { ocrSpaceOcr } from "../src/ocr-space";
 import {
   getOcrSpaceUsage,
   hasOcrSpaceCapacity,
   markOcrSpaceQuotaExhausted,
-  recordOcrSpaceRequest,
+  reserveOcrSpaceRequest,
 } from "../src/ocr-space-usage";
-
-function memoryKv(): KVNamespace {
-  const values = new Map<string, string>();
-  return {
-    get: async (key: string) => values.get(key) ?? null,
-    put: async (key: string, value: string | ArrayBuffer | ArrayBufferView | ReadableStream) => {
-      values.set(key, String(value));
-    },
-  } as unknown as KVNamespace;
-}
 
 describe("OCR.space", () => {
   afterEach(() => vi.unstubAllGlobals());
@@ -59,19 +50,18 @@ describe("OCR.space", () => {
 
 describe("OCR.space daily usage", () => {
   it("counts by Bangkok calendar day", async () => {
-    const kv = memoryKv();
+    const counters = env.OPERATIONAL_COUNTERS;
     const dayOne = new Date("2026-07-15T16:59:00.000Z");
     const dayTwo = new Date("2026-07-15T17:01:00.000Z");
 
-    expect(await recordOcrSpaceRequest(kv, dayOne)).toBe(1);
-    expect(await getOcrSpaceUsage(kv, dayOne)).toBe(1);
-    expect(await getOcrSpaceUsage(kv, dayTwo)).toBe(0);
+    expect((await reserveOcrSpaceRequest(counters, dayOne)).value).toBe(1);
+    expect(await getOcrSpaceUsage(counters, dayOne)).toBe(1);
+    expect(await getOcrSpaceUsage(counters, dayTwo)).toBe(0);
   });
 
   it("stops after the provider reports its daily quota exhausted", async () => {
-    const kv = memoryKv();
-    await markOcrSpaceQuotaExhausted(kv);
-    expect(await getOcrSpaceUsage(kv)).toBe(500);
-    expect(await hasOcrSpaceCapacity(kv)).toBe(false);
+    await markOcrSpaceQuotaExhausted(env.OPERATIONAL_COUNTERS);
+    expect(await getOcrSpaceUsage(env.OPERATIONAL_COUNTERS)).toBe(500);
+    expect(await hasOcrSpaceCapacity(env.OPERATIONAL_COUNTERS)).toBe(false);
   });
 });

@@ -161,6 +161,56 @@ describe("receipt decision", () => {
     expect(formatDecision(inspection, decision)).toContain("-1.22");
   });
 
+  it.each([
+    "AMT: THB 1.22",
+    "AMT : THB -1.22",
+    "AMT: 1.22 THB",
+    "AMOUNT: 1.22 THB",
+    "AMOUNT THB 1.22",
+    "AMT:\nTHB\n-1.22",
+    "AMOUNT: THB 1,22",
+  ])("accepts the expected amount from the labeled field: %s", (amountText) => {
+    const inspection = inspectReceiptText(`CHANNEL: KPLUS\nSETTLEMENT\n${amountText}`);
+
+    expect(inspection.labeledAmounts).toSatisfy(
+      (amounts: number[]) => amounts.some((amount) => Math.abs(Math.abs(amount) - 1.22) < 0.005),
+    );
+    expect(decideReceipt(inspection, 1.22, -1.22, 0.65).status).toBe("pass");
+  });
+
+  it("accepts an expected amount anywhere even when the labeled amount is different", () => {
+    const inspection = inspectReceiptText(
+      "CHANNEL: KPLUS\nSETTLEMENT\nAMT: THB 80.00\nFEE: THB 1.22",
+    );
+
+    expect(inspection.observedAmounts).toEqual([80, 1.22]);
+    expect(inspection.labeledAmounts).toEqual([80]);
+    expect(decideReceipt(inspection, 1.22, -1.22, 0.65).status).toBe("pass");
+  });
+
+  it("accepts an unlabeled expected amount anywhere on the receipt", () => {
+    const inspection = inspectReceiptText("CHANNEL: KPLUS\nSETTLEMENT\nFEE: THB 1.22");
+
+    expect(inspection.observedAmounts).toEqual([1.22]);
+    expect(inspection.labeledAmounts).toEqual([]);
+    expect(decideReceipt(inspection, 1.22, -1.22, 0.65).status).toBe("pass");
+  });
+
+  it("accepts 1.22 from the settlement summary without AMT/AMOUNT", () => {
+    const inspection = inspectReceiptText([
+      "KPLUS",
+      "SETTLEMENT",
+      "SALES THB 0.00",
+      "VOID 1 -THB 1.22",
+      "TOTAL THB 0.00",
+      "SETTLEMENT SUCCESSFUL",
+    ].join("\n"));
+
+    expect(inspection.labeledAmounts).toEqual([]);
+    expect(inspection.observedAmounts).toContain(-1.22);
+    expect(decideReceipt(inspection, 1.22, -1.22, 0.65).status).toBe("pass");
+  });
+
   it("fails KPLUS when the amount is not 1.22 or -1.22", () => {
     const inspection = inspectReceiptText("KPLUS\nSETTLEMENT\nAMT: THB 2.22");
     const decision = decideReceipt(inspection, 1.22, -1.22, 0.65);

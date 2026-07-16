@@ -158,4 +158,40 @@ describe("LINE webhook", () => {
     expect(sent).toBe(true);
     expect(fetchMock.mock.calls[0]?.[0]).toBe("https://api.line.me/v2/bot/message/push");
   });
+
+  it("reports delivery failure when reply and fallback are unavailable", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 400 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const sent = await sendInspectionResult({
+      webhookEventId: "event-failed",
+      messageId: "image-failed",
+      replyToken: "expired-token",
+      replyTarget: "group-1",
+      sourceType: "group",
+      senderUserId: "U123",
+    }, "result", "channel-token", false);
+
+    expect(sent).toBe(false);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports success only when push fallback succeeds", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(null, { status: 400 }))
+      .mockResolvedValueOnce(new Response(null, { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const sent = await sendInspectionResult({
+      webhookEventId: "event-fallback",
+      messageId: "image-fallback",
+      replyToken: "expired-token",
+      replyTarget: "group-1",
+      sourceType: "group",
+      senderUserId: "U123",
+    }, "result", "channel-token", true);
+
+    expect(sent).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
 });
