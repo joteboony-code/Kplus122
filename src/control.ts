@@ -164,6 +164,21 @@ function loginPage(error = ""): string {
   <div class="foot">เซสชันหมดอายุอัตโนมัติภายใน 8 ชั่วโมง</div></main></body></html>`;
 }
 
+function confirmPage(target: "disable" | "clear-logs"): string {
+  const disable = target === "disable";
+  const title = disable ? "ยืนยันหยุดระบบ" : "ยืนยันล้าง Log";
+  const detail = disable
+    ? "รูปใหม่จะไม่ถูกตรวจจนกว่าจะเปิดระบบอีกครั้ง"
+    : "Log การตรวจทั้งหมดจะถูกลบและไม่สามารถกู้คืนได้";
+  const action = disable ? "/control/toggle" : "/control/logs/clear";
+  const hidden = disable
+    ? '<input type="hidden" name="action" value="disable">'
+    : "";
+  return `<!doctype html><html lang="th"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title><style>
+    :root{color-scheme:dark;font-family:Inter,"Noto Sans Thai",system-ui,sans-serif;background:#08110d;color:#eefbf4}*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px;background:#08110d}.confirm{width:min(100%,430px);padding:28px;border:1px solid #663b41;border-radius:20px;background:#211317;box-shadow:0 24px 80px #0008}h1{margin:0 0 10px;font-size:26px}p{margin:0 0 22px;color:#d5aab1;line-height:1.6}.actions{display:grid;grid-template-columns:1fr 1fr;gap:10px}.actions button,.actions a{display:grid;place-items:center;min-height:48px;border-radius:12px;font-weight:900;text-decoration:none}.actions button{border:0;background:#f06474;color:#2b090e;cursor:pointer}.actions a{border:1px solid #3a5b49;color:#c8ded2;background:#0b1710}
+  </style></head><body><main class="confirm"><h1>${title}</h1><p>${detail}</p><div class="actions"><a href="/control">ยกเลิก</a><form method="post" action="${action}">${hidden}<button type="submit">ยืนยัน</button></form></div></main></body></html>`;
+}
+
 interface ProviderStatus {
   ocrSpaceConfigured: boolean;
   ocrSpaceUsage: number;
@@ -171,6 +186,8 @@ interface ProviderStatus {
   googleVisionUsage: number;
   dailyStats: DailyStats;
   logs: InspectionLogRow[];
+  versionId: string;
+  versionTimestamp: string;
 }
 
 function escapeHtml(value: string): string {
@@ -180,6 +197,41 @@ function escapeHtml(value: string): string {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#39;");
+}
+
+function bangkokTime(value: Date): string {
+  return value.toLocaleString("th-TH", {
+    timeZone: "Asia/Bangkok",
+    hour12: false,
+  });
+}
+
+function serviceAlerts(enabled: boolean, providers: ProviderStatus): string {
+  const alerts: string[] = [];
+  if (!enabled) alerts.push("ระบบตรวจรูปกำลังหยุดทำงาน");
+  if (!providers.ocrSpaceConfigured) alerts.push("OCR.space ยังไม่ได้ตั้งค่า API key");
+  if (providers.ocrSpaceUsage >= OCR_SPACE_DAILY_LIMIT) {
+    alerts.push("OCR.space ครบโควตาวันนี้ ระบบจะใช้ Workers AI แทน");
+  }
+  if (!providers.googleVisionConfigured) alerts.push("Google Vision ยังไม่ได้ตั้งค่า API key");
+  if (providers.googleVisionUsage >= GOOGLE_VISION_FREE_MONTHLY_UNITS) {
+    alerts.push("Google Vision ถึงเพดานการใช้งานประจำเดือน");
+  }
+  if (providers.dailyStats.ocrSpaceErrors > 0) {
+    alerts.push(`OCR.space ผิดพลาดวันนี้ ${providers.dailyStats.ocrSpaceErrors} ครั้ง`);
+  }
+  if (providers.dailyStats.workersAiErrors > 0) {
+    alerts.push(`Workers AI ผิดพลาดวันนี้ ${providers.dailyStats.workersAiErrors} ครั้ง`);
+  }
+  if (providers.dailyStats.googleVisionErrors > 0) {
+    alerts.push(`Google Vision ผิดพลาดวันนี้ ${providers.dailyStats.googleVisionErrors} ครั้ง`);
+  }
+  if (providers.dailyStats.errors > 0) {
+    alerts.push(`งานตรวจผิดพลาดวันนี้ ${providers.dailyStats.errors} รายการ`);
+  }
+  return alerts.length === 0
+    ? '<div class="service-health ok">✓ บริการทั้งหมดทำงานปกติ</div>'
+    : `<div class="service-health warning"><b>⚠ พบสิ่งที่ต้องตรวจสอบ</b><ul>${alerts.map((alert) => `<li>${escapeHtml(alert)}</li>`).join("")}</ul></div>`;
 }
 
 function logCards(logs: InspectionLogRow[]): string {
@@ -218,6 +270,18 @@ function logCards(logs: InspectionLogRow[]): string {
       : log.has_settlement
         ? { css: "found", text: "พบ SETTLEMENT" }
         : { css: "missing", text: "ไม่พบ SETTLEMENT" };
+    const deliveryState = log.line_delivery_status === "sent"
+      ? {
+          css: "sent",
+          text: log.line_delivery_method === "push"
+            ? "Push สำเร็จ"
+            : "Reply สำเร็จ",
+        }
+      : log.line_delivery_status === "pending"
+        ? { css: "pending", text: "รอส่ง Push" }
+        : log.line_delivery_status === "failed"
+          ? { css: "failed", text: "ส่งไม่สำเร็จ" }
+          : { css: "none", text: "ไม่ต้องส่ง" };
     let timing = "";
     if (log.provider_timings) {
       try {
@@ -238,6 +302,7 @@ function logCards(logs: InspectionLogRow[]): string {
         <span class="evidence-chip ${kplusState.css}"><i>${kplusState.css === "found" ? "✓" : kplusState.css === "missing" ? "✕" : "?"}</i>${kplusState.text}</span>
         <span class="evidence-chip ${settlementState.css}"><i>${settlementState.css === "found" ? "✓" : settlementState.css === "missing" ? "✕" : "?"}</i>${settlementState.text}</span>
         </div>
+        <span class="delivery-chip ${deliveryState.css}">${deliveryState.text}</span>
         <div class="log-meta"><time>${escapeHtml(time)}</time><span>${log.processing_ms}ms${log.queue_delay_ms === null ? "" : ` · รอคิว ${log.queue_delay_ms}ms`}</span></div>
       </div>
       <details class="log-more"><summary>รายละเอียด</summary><div>เส้นทาง: ${escapeHtml(log.provider_chain ?? "ไม่เรียก OCR")} · ขั้นตอน: ${escapeHtml(log.stage ?? "-")}${timing ? ` · ${escapeHtml(timing)}` : ""}${log.error ? ` · ${escapeHtml(log.error)}` : ""}</div></details>
@@ -252,6 +317,9 @@ function controlPage(enabled: boolean, providers: ProviderStatus): string {
     : "รูปใหม่จะไม่เข้าคิว และงานค้างจะถูกข้ามโดยไม่ใช้ AI";
   const nextAction = enabled ? "disable" : "enable";
   const buttonText = enabled ? "หยุดระบบตรวจรูป" : "เปิดระบบตรวจรูป";
+  const actionForm = enabled
+    ? `<form class="action" method="get" action="/control/confirm"><input type="hidden" name="target" value="disable"><button type="submit">${buttonText}</button></form>`
+    : `<form class="action" method="post" action="/control/toggle"><input type="hidden" name="action" value="${nextAction}"><button type="submit">${buttonText}</button></form>`;
   const ocrSpaceRemaining = Math.max(
     OCR_SPACE_DAILY_LIMIT - providers.ocrSpaceUsage,
     0,
@@ -284,6 +352,13 @@ function controlPage(enabled: boolean, providers: ProviderStatus): string {
             ? `เริ่มเข้าเขตเตือน · คาดว่าเหลือ ${googleVisionRemaining} units`
             : `ตั้งค่าคีย์แล้ว · คาดว่าเหลือ ${googleVisionRemaining} units`;
   const recentLogs = logCards(providers.logs);
+  const updatedAt = bangkokTime(new Date());
+  const versionId = escapeHtml(providers.versionId || "local");
+  const versionShort = versionId === "local" ? versionId : versionId.slice(0, 8);
+  const versionTitle = escapeHtml(
+    [providers.versionId, providers.versionTimestamp].filter(Boolean).join(" · "),
+  );
+  const alerts = serviceAlerts(enabled, providers);
   return `<!doctype html>
 <html lang="th">
 <head>
@@ -304,14 +379,16 @@ function controlPage(enabled: boolean, providers: ProviderStatus): string {
     .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}.stat{padding:13px;border:1px solid #294537;border-radius:13px;background:#0a1710}.stat small{display:block;color:#718d7e;font-size:11px}.stat strong{display:block;margin-top:5px;font-size:22px}.stat.wide{grid-column:span 2}.stat em{display:block;margin-top:5px;color:#8ca799;font-size:11px;font-style:normal;line-height:1.4}
     .meter{height:7px;margin-top:11px;border-radius:99px;background:#203429;overflow:hidden}.meter span{display:block;height:100%;width:${Math.min((providers.ocrSpaceUsage / OCR_SPACE_DAILY_LIMIT) * 100, 100)}%;background:${ocrSpaceRemaining > 0 ? "#30dc78" : "#f06474"}}
     .notice{margin-top:16px;padding:14px 16px;border-radius:13px;background:#172019;color:#91aa9c;font-size:13px;line-height:1.6;border:1px solid #293a30}
+    .control-bar{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-bottom:15px;color:#8fa99a;font-size:11px}.control-bar .version{padding:5px 8px;border:1px solid #345342;border-radius:999px;background:#0b1811;color:#b8d2c3}.refresh{margin-left:auto;padding:7px 11px;border:1px solid #3a6a50;border-radius:9px;color:#7ef0aa;text-decoration:none;background:#10271a;font-weight:800}.service-health{margin:16px 0 0;padding:11px 13px;border-radius:12px;font-size:12px;line-height:1.5}.service-health.ok{border:1px solid #2f7350;background:#102b1c;color:#74eba2}.service-health.warning{border:1px solid #8a6230;background:#302413;color:#ffd58d}.service-health ul{margin:7px 0 0;padding-left:20px}
     .logs{display:grid;gap:8px}.log-row,.log-empty{position:relative;overflow:hidden;padding:10px 12px;border:1px solid #294537;border-left:4px solid #536b5e;border-radius:11px;background:#0a1710}.log-row.pass{border-left-color:#36e77c;background:linear-gradient(90deg,#123522 0,#0a1710 28%)}.log-row.fail{border-left-color:#ff6478;background:linear-gradient(90deg,#35171d 0,#0a1710 28%)}.log-row.error{border-left-color:#ffad55;background:linear-gradient(90deg,#352515 0,#0a1710 28%)}.log-row.ignored{border-left-color:#71877b}.log-main{display:grid;grid-template-columns:minmax(105px,.75fr) minmax(82px,.55fr) minmax(92px,.65fr) minmax(230px,1.5fr) minmax(150px,1fr);gap:12px;align-items:center}.outcome-badge{display:inline-flex;align-items:center;gap:7px;font-size:14px;white-space:nowrap}.outcome-badge i,.evidence-chip i{display:grid;place-items:center;font-style:normal;font-weight:900}.outcome-badge i{width:22px;height:22px;border-radius:50%;background:#52695d;color:#fff}.pass .outcome-badge{color:#70f5a5}.pass .outcome-badge i{background:#2bc96c;color:#05200f}.fail .outcome-badge{color:#ff8c9a}.fail .outcome-badge i{background:#e05264}.error .outcome-badge{color:#ffc17e}.error .outcome-badge i{background:#ef9c45;color:#251406}.log-cell{font-size:12px;min-width:0}.log-cell small{display:block;color:#789486;font-size:9px;margin-bottom:1px}.job-value,.amount-value{display:block;overflow:hidden;text-overflow:ellipsis;font-size:13px;color:#f4fff8;letter-spacing:.02em;white-space:nowrap}.pass .amount-value{color:#70f5a5}.fail .amount-value{color:#ff9aa6}.evidence-row{display:flex;flex-wrap:nowrap;gap:6px;margin:0}.evidence-chip{display:inline-flex;align-items:center;gap:4px;padding:4px 7px;border:1px solid #43574c;border-radius:999px;background:#142019;color:#9db1a6;font-size:10px;font-weight:800;white-space:nowrap}.evidence-chip i{width:14px;height:14px;border-radius:50%;font-size:9px}.evidence-chip.found{border-color:#2bc96c;background:#123a23;color:#79f5a8}.evidence-chip.found i{background:#2bc96c;color:#05200f}.evidence-chip.missing{border-color:#b84554;background:#38181e;color:#ff9aa7}.evidence-chip.missing i{background:#d84f61;color:#fff}.evidence-chip.unknown i{background:#52695d;color:#fff}.log-meta{display:grid;justify-items:end;color:#9ab2a5;font-size:10px;line-height:1.45;white-space:nowrap}.log-more{margin-top:5px;color:#789486;font-size:10px}.log-more summary{width:max-content;cursor:pointer;color:#8eaa9b}.log-more div{margin-top:5px;padding-top:5px;border-top:1px solid #294537;line-height:1.5;overflow-wrap:anywhere}.log-actions{display:flex;justify-content:space-between;align-items:center;margin:22px 0 10px}.log-actions .section-title{margin:0}.clear-logs button{border:1px solid #663b41;border-radius:9px;background:transparent;color:#ff9daa;padding:7px 10px;cursor:pointer}.log-empty{color:#789486;text-align:center}
-    .log-main{grid-template-columns:100px 72px 82px minmax(190px,1fr) 105px}.log-meta{font-size:9px;white-space:normal;text-align:right}
+    .delivery-chip{display:inline-flex;justify-content:center;padding:5px 7px;border:1px solid #42584c;border-radius:999px;font-size:9px;font-weight:900;white-space:nowrap}.delivery-chip.sent{border-color:#2bc96c;background:#123a23;color:#79f5a8}.delivery-chip.pending{border-color:#b88b39;background:#352a15;color:#ffd477}.delivery-chip.failed{border-color:#b84554;background:#38181e;color:#ff9aa7}.delivery-chip.none{color:#83988c;background:#142019}.log-main{grid-template-columns:88px 66px 72px minmax(165px,1fr) 96px 88px}.log-meta{font-size:9px;white-space:normal;text-align:right}
     @media(max-width:650px){body{padding:15px}.shell{margin:12px auto}.panel{padding:25px}.pipeline,.meta{grid-template-columns:1fr}.stats{grid-template-columns:repeat(2,1fr)}.step:not(:last-child)::after{content:"↓";right:50%;top:auto;bottom:-18px;transform:translateX(50%)}.brand span{display:none}.log-main{grid-template-columns:1fr 1fr;gap:8px}.evidence-row{grid-column:1/-1;flex-wrap:wrap}.log-meta{justify-items:start;text-align:left}}
   </style>
 </head>
 <body><main class="shell"><header class="top"><div class="brand"><div class="mark">K+</div><div><strong>KPLUS Control</strong><span>LINE receipt inspection</span></div></div><form class="logout" method="post" action="/control/logout"><button type="submit">ออกจากระบบ</button></form></header>
-  <section class="panel"><div class="eyebrow"><span class="dot"></span>สถานะระบบล่าสุด</div><h1>${statusText}</h1><p class="detail">${statusDetail}</p>
-  <form class="action" method="post" action="/control/toggle"><input type="hidden" name="action" value="${nextAction}"><button type="submit">${buttonText}</button></form>
+  <section class="panel"><div class="control-bar"><span>อัปเดตล่าสุด ${escapeHtml(updatedAt)}</span><span class="version" title="${versionTitle}">เวอร์ชัน ${versionShort}</span><a class="refresh" href="/control">รีเฟรช</a></div><div class="eyebrow"><span class="dot"></span>สถานะระบบล่าสุด</div><h1>${statusText}</h1><p class="detail">${statusDetail}</p>
+  ${alerts}
+  ${actionForm}
   <div class="pipeline"><div class="step"><small>ขั้นที่ 1</small><b>OCR.space</b><em>ตรวจ 500 รูปแรกของวัน</em></div><div class="step"><small>ขั้นที่ 2</small><b>Workers AI</b><em>ตรวจเมื่อ OCR.space ครบหรือข้อมูลไม่พอ</em></div><div class="step"><small>ขั้นที่ 3</small><b>Google Vision</b><em>ตรวจยืนยันเมื่อ Workers AI ยังตัดสินไม่ได้</em></div></div>
   <div class="section-title">สถิติวันนี้</div>
   <div class="stats">
@@ -334,7 +411,7 @@ function controlPage(enabled: boolean, providers: ProviderStatus): string {
     <div class="item"><small>คิวและกฎปัจจุบัน</small><b>ตรวจพร้อมกันสูงสุด 2 รูป · รวมผลตามกลุ่มและผู้ส่ง</b><em>รับเลขงาน 8 หลักก่อนรูป · KPLUS/K+/Thai QR Payment + SETTLEMENT + ยอด 1.22 หรือ -1.22</em></div>
   </div>
   <div class="notice">OCR.space นับตามวันที่ประเทศไทย ส่วน Google Vision เป็นค่าประมาณรายเดือนที่นับเฉพาะคำขอสำเร็จจาก Worker นี้ตั้งแต่เริ่มใช้ตัวนับ ไม่รวมระบบอื่นใน Google Cloud Project การเปลี่ยนสถานะอาจใช้เวลาสั้น ๆ ก่อนมีผลครบทุกศูนย์ข้อมูล</div>
-  <div class="log-actions"><div class="section-title">Log การตรวจล่าสุด 50 รูป</div><form class="clear-logs" method="post" action="/control/logs/clear"><button type="submit">ล้าง Log</button></form></div>
+  <div class="log-actions"><div class="section-title">Log การตรวจล่าสุด 50 รูป</div><form class="clear-logs" method="get" action="/control/confirm"><input type="hidden" name="target" value="clear-logs"><button type="submit">ล้าง Log</button></form></div>
   <div class="logs">${recentLogs}</div></section></main></body></html>`;
 }
 
@@ -355,7 +432,7 @@ export async function handleControlRequest(
   env: Pick<
     Env,
     "CONTROL_PASSWORD" | "CONTROL_DB" | "OPERATIONAL_COUNTERS" | "OCR_SPACE_API_KEY" | "GOOGLE_VISION_API_KEY" | "PROCESSING_FORCE_DISABLED"
-  >,
+  > & { CF_VERSION_METADATA?: WorkerVersionMetadata },
 ): Promise<Response | null> {
   const url = new URL(request.url);
   if (!url.pathname.startsWith("/control")) return null;
@@ -382,6 +459,14 @@ export async function handleControlRequest(
   const authenticated = await hasValidSession(request, env.CONTROL_PASSWORD);
   if (!authenticated) return htmlResponse(loginPage());
 
+  if (request.method === "GET" && url.pathname === "/control/confirm") {
+    const target = url.searchParams.get("target");
+    if (target !== "disable" && target !== "clear-logs") {
+      return htmlResponse("Invalid confirmation target", 400);
+    }
+    return htmlResponse(confirmPage(target));
+  }
+
   if (request.method === "GET" && (url.pathname === "/control" || url.pathname === "/control/")) {
     const [enabled, ocrSpaceUsage, googleVisionUsage, dailyStats, logs] = await Promise.all([
       isProcessingEnabled(
@@ -400,6 +485,8 @@ export async function handleControlRequest(
       googleVisionUsage,
       dailyStats,
       logs,
+      versionId: env.CF_VERSION_METADATA?.id ?? "local",
+      versionTimestamp: env.CF_VERSION_METADATA?.timestamp ?? "",
     }));
   }
 

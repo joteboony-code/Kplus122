@@ -2,6 +2,9 @@ import type { ImageJob } from "./types";
 
 export const AUDIT_RETENTION_SECONDS = 7 * 24 * 60 * 60;
 
+export type LineDeliveryStatus = "not_applicable" | "pending" | "sent" | "failed";
+export type LineDeliveryMethod = "reply" | "push";
+
 export interface InspectionTrace {
   providers: string[];
   providerTimings: Record<string, number>;
@@ -9,6 +12,8 @@ export interface InspectionTrace {
   observedAmounts?: number[];
   hasKplus?: boolean;
   hasSettlement?: boolean;
+  lineDeliveryStatus?: LineDeliveryStatus;
+  lineDeliveryMethod?: LineDeliveryMethod;
 }
 
 export interface InspectionLogRow {
@@ -25,6 +30,9 @@ export interface InspectionLogRow {
   queue_delay_ms: number | null;
   processing_ms: number;
   error: string | null;
+  line_delivery_status: LineDeliveryStatus;
+  line_delivery_method: LineDeliveryMethod | null;
+  line_delivery_updated_at: number | null;
 }
 
 function limited(value: string | undefined, length = 500): string | null {
@@ -45,8 +53,9 @@ export async function recordInspectionLog(
       webhook_event_id, message_id, conversation_id, sender_user_id,
       reference_code, outcome, stage, provider_chain, provider_timings,
       observed_amounts, has_kplus, has_settlement, queue_delay_ms,
-      processing_ms, error
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      processing_ms, error, line_delivery_status, line_delivery_method,
+      line_delivery_updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
       .bind(
         job.webhookEventId,
         job.messageId,
@@ -63,6 +72,11 @@ export async function recordInspectionLog(
         job.timestamp ? Math.max(0, startedAt - job.timestamp) : null,
         Math.max(0, now - startedAt),
         limited(error),
+        trace.lineDeliveryStatus ?? "not_applicable",
+        trace.lineDeliveryMethod ?? null,
+        trace.lineDeliveryStatus && trace.lineDeliveryStatus !== "not_applicable"
+          ? Math.floor(now / 1000)
+          : null,
       ),
     db.prepare("DELETE FROM inspection_logs WHERE created_at < unixepoch() - ?")
       .bind(AUDIT_RETENTION_SECONDS),
@@ -77,13 +91,29 @@ export async function listInspectionLogs(
   const result = await db.prepare(`SELECT
       id, created_at, reference_code, outcome, stage, provider_chain,
       provider_timings, observed_amounts, has_kplus, has_settlement,
-      queue_delay_ms, processing_ms, error
+      queue_delay_ms, processing_ms, error, line_delivery_status,
+      line_delivery_method, line_delivery_updated_at
     FROM inspection_logs
     ORDER BY id DESC
     LIMIT ?`)
     .bind(safeLimit)
     .all<InspectionLogRow>();
   return result.results;
+}
+
+export async function updateLineDeliveryStatus(
+  db: D1Database,
+  messageId: string,
+  status: LineDeliveryStatus,
+  method: LineDeliveryMethod | null,
+): Promise<void> {
+  await db.prepare(`UPDATE inspection_logs
+    SET line_delivery_status = ?,
+        line_delivery_method = ?,
+        line_delivery_updated_at = unixepoch()
+    WHERE message_id = ?`)
+    .bind(status, method, messageId)
+    .run();
 }
 
 export async function clearInspectionLogs(db: D1Database): Promise<void> {

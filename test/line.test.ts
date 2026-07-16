@@ -5,6 +5,7 @@ import {
   referenceCodeFromEvent,
   sendInspectionPushResult,
   sendInspectionResult,
+  sendInspectionResultWithMethod,
   verifyLineSignature,
 } from "../src/line";
 
@@ -193,5 +194,36 @@ describe("LINE webhook", () => {
 
     expect(sent).toBe(true);
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("reports whether LINE used Reply or Push", async () => {
+    const replyFetch = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
+    vi.stubGlobal("fetch", replyFetch);
+    const job = {
+      webhookEventId: "event-method",
+      messageId: "image-method",
+      replyToken: "reply-token",
+      replyTarget: "group-1",
+      sourceType: "group" as const,
+      senderUserId: "U123",
+    };
+
+    expect(await sendInspectionResultWithMethod(
+      job,
+      "result",
+      "channel-token",
+      true,
+    )).toBe("reply");
+
+    const pushFetch = vi.fn()
+      .mockResolvedValueOnce(new Response(null, { status: 400 }))
+      .mockResolvedValueOnce(new Response(null, { status: 200 }));
+    vi.stubGlobal("fetch", pushFetch);
+    expect(await sendInspectionResultWithMethod(
+      job,
+      "result",
+      "channel-token",
+      true,
+    )).toBe("push");
   });
 });

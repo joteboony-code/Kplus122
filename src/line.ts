@@ -197,6 +197,20 @@ export async function sendInspectionResult(
   channelAccessToken: string,
   enablePushFallback: boolean,
 ): Promise<boolean> {
+  return (await sendInspectionResultWithMethod(
+    job,
+    text,
+    channelAccessToken,
+    enablePushFallback,
+  )) !== null;
+}
+
+export async function sendInspectionResultWithMethod(
+  job: ImageJob,
+  text: string,
+  channelAccessToken: string,
+  enablePushFallback: boolean,
+): Promise<"reply" | "push" | null> {
   const message = inspectionMessage(job, text);
 
   const replied = await postLineMessage(
@@ -208,14 +222,15 @@ export async function sendInspectionResult(
     },
   );
 
-  if (replied) return true;
+  if (replied) return "reply";
   if (enablePushFallback && job.replyTarget) {
-    return postLineMessage("/v2/bot/message/push", channelAccessToken, {
+    const pushed = await postLineMessage("/v2/bot/message/push", channelAccessToken, {
       to: job.replyTarget,
       messages: [message],
     });
+    return pushed ? "push" : null;
   }
-  return false;
+  return null;
 }
 
 export async function sendInspectionPushResult(

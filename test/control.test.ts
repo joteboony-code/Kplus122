@@ -59,6 +59,9 @@ function controlDbWithLog(): D1Database {
             queue_delay_ms: 250,
             processing_ms: 1562,
             error: null,
+            line_delivery_status: "sent",
+            line_delivery_method: "reply",
+            line_delivery_updated_at: 1_784_133_301,
           }],
         }),
       } as unknown as D1PreparedStatement;
@@ -89,6 +92,13 @@ describe("processing control", () => {
       CONTROL_PASSWORD: "strong-test-password",
       CONTROL_DB: memoryControlDb(),
       OPERATIONAL_COUNTERS: workerEnv.OPERATIONAL_COUNTERS,
+      OCR_SPACE_API_KEY: "ocr-test-key",
+      GOOGLE_VISION_API_KEY: "vision-test-key",
+      CF_VERSION_METADATA: {
+        id: "12345678-aaaa-bbbb-cccc-123456789012",
+        tag: "",
+        timestamp: "2026-07-16T15:00:00.000Z",
+      },
     };
 
     const anonymous = await handleControlRequest(
@@ -146,6 +156,10 @@ describe("processing control", () => {
     expect(page).toContain("0 / 1000 units");
     expect(page).toContain("สถิติวันนี้");
     expect(page).toContain("รูปซ้ำที่กันไว้");
+    expect(page).toContain("รีเฟรช");
+    expect(page).toContain("อัปเดตล่าสุด");
+    expect(page).toContain("เวอร์ชัน 12345678");
+    expect(page).toContain("บริการทั้งหมดทำงานปกติ");
   });
 
   it("lets an authenticated operator disable processing", async () => {
@@ -167,6 +181,15 @@ describe("processing control", () => {
       env,
     );
     const sessionCookie = login?.headers.get("Set-Cookie")?.split(";", 1)[0] ?? "";
+
+    const confirmation = await handleControlRequest(
+      new Request("https://example.com/control/confirm?target=disable", {
+        headers: { Cookie: sessionCookie },
+      }),
+      env,
+    );
+    expect(confirmation?.status).toBe(200);
+    expect(await confirmation?.text()).toContain("ยืนยันหยุดระบบ");
 
     const toggle = await handleControlRequest(
       new Request("https://example.com/control/toggle", {
@@ -215,6 +238,36 @@ describe("processing control", () => {
     expect(page).toContain('class="evidence-chip found"><i>✓</i>พบ SETTLEMENT');
     expect(page).toContain('class="amount-value">1.22,-1.22');
     expect(page).toContain('class="job-value">28038457');
+    expect(page).toContain('class="delivery-chip sent">Reply สำเร็จ');
+  });
+
+  it("asks for confirmation before clearing inspection logs", async () => {
+    const env = {
+      CONTROL_PASSWORD: "strong-test-password",
+      CONTROL_DB: memoryControlDb(),
+      OPERATIONAL_COUNTERS: workerEnv.OPERATIONAL_COUNTERS,
+    };
+    const login = await handleControlRequest(
+      new Request("https://example.com/control/login", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+          Origin: "https://example.com",
+        },
+        body: new URLSearchParams({ password: env.CONTROL_PASSWORD }),
+      }),
+      env,
+    );
+    const sessionCookie = login?.headers.get("Set-Cookie")?.split(";", 1)[0] ?? "";
+    const confirmation = await handleControlRequest(
+      new Request("https://example.com/control/confirm?target=clear-logs", {
+        headers: { Cookie: sessionCookie },
+      }),
+      env,
+    );
+
+    expect(confirmation?.status).toBe(200);
+    expect(await confirmation?.text()).toContain("ยืนยันล้าง Log");
   });
 
   it("accepts a browser same-origin form when Origin is serialized as null", async () => {

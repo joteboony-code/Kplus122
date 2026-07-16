@@ -26,6 +26,9 @@ import { handleControlRequest, isProcessingEnabled } from "./control";
 import {
   purgeExpiredInspectionLogs,
   recordInspectionLog,
+  updateLineDeliveryStatus,
+  type LineDeliveryMethod,
+  type LineDeliveryStatus,
   type InspectionTrace,
 } from "./audit-log";
 import { getJobReference, storeJobReference } from "./job-reference";
@@ -35,7 +38,7 @@ import {
   imageJobFromEvent,
   referenceCodeFromEvent,
   sendInspectionPushResult,
-  sendInspectionResult,
+  sendInspectionResultWithMethod,
   verifyLineSignature,
 } from "./line";
 import { hasRecentPass, recordRecentPass } from "./reply-state";
@@ -121,6 +124,25 @@ async function recordAuditSafely(
   }
 }
 
+async function updateLineDeliverySafely(
+  env: Env,
+  job: ImageJob,
+  status: LineDeliveryStatus,
+  method: LineDeliveryMethod | null,
+): Promise<void> {
+  try {
+    await updateLineDeliveryStatus(env.CONTROL_DB, job.messageId, status, method);
+  } catch (error) {
+    console.error(JSON.stringify({
+      event: "line_delivery_log_update_failed",
+      messageId: job.messageId,
+      status,
+      method,
+      error: error instanceof Error ? error.message : "unknown error",
+    }));
+  }
+}
+
 function numericSetting(value: string, name: string): number {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) throw new Error(`Invalid ${name} setting`);
@@ -132,6 +154,7 @@ async function replyKplusSuccess(
   amount: number,
   provider: string,
   env: Env,
+  trace: InspectionTrace,
 ): Promise<ProcessResult> {
   const roundKey = receiptRoundKey(job);
   if (roundKey) {
@@ -140,16 +163,21 @@ async function replyKplusSuccess(
     if (claim === "busy") throw new Error("Pass delivery is already in progress");
   }
 
-  let sent = false;
+  trace.lineDeliveryStatus = "pending";
+  let method: LineDeliveryMethod | null = null;
   try {
-    sent = await sendInspectionResult(
+    method = await sendInspectionResultWithMethod(
       job,
       formatKplusSuccess(amount),
       env.LINE_CHANNEL_ACCESS_TOKEN,
       String(env.ENABLE_PUSH_FALLBACK) === "true",
     );
-    if (!sent) throw new Error("LINE inspection result delivery failed");
+    if (!method) throw new Error("LINE inspection result delivery failed");
+    trace.lineDeliveryStatus = "sent";
+    trace.lineDeliveryMethod = method;
   } catch (error) {
+    trace.lineDeliveryStatus = "failed";
+    delete trace.lineDeliveryMethod;
     if (roundKey) {
       await env.RECEIPT_ROUNDS.getByName(roundKey).releasePass(job);
     }
@@ -351,6 +379,7 @@ async function processImageJob(
             matchedAmount,
             "ocr-space",
             env,
+            trace,
           );
         }
 
@@ -464,6 +493,7 @@ async function processImageJob(
       matchedAmount,
       "workers-ai",
       env,
+      trace,
     );
   }
 
@@ -580,6 +610,7 @@ async function processImageJob(
       matchedAmount,
       "google-vision",
       env,
+      trace,
     );
   }
 
@@ -644,7 +675,21 @@ async function processRoundFinalizer(
         result.evidence.text,
         env.LINE_CHANNEL_ACCESS_TOKEN,
       );
-      if (!sent) throw new Error("LINE round summary delivery failed");
+      if (!sent) {
+        await updateLineDeliverySafely(
+          env,
+          result.evidence.job,
+          "failed",
+          "push",
+        );
+        throw new Error("LINE round summary delivery failed");
+      }
+      await updateLineDeliverySafely(
+        env,
+        result.evidence.job,
+        "sent",
+        "push",
+      );
     }
     await env.RECEIPT_ROUNDS.getByName(job.roundKey).completeFinalization(job);
   } catch (error) {
@@ -745,15 +790,23 @@ export default {
               delaySeconds: ROUND_INACTIVITY_SECONDS,
             });
           } else if (!roundKey && result.evidence) {
-            const sent = await sendInspectionResult(
+            trace.lineDeliveryStatus = "pending";
+            const method = await sendInspectionResultWithMethod(
               job,
               result.evidence.text,
               env.LINE_CHANNEL_ACCESS_TOKEN,
               String(env.ENABLE_PUSH_FALLBACK) === "true",
             );
-            if (!sent) throw new Error("LINE inspection result delivery failed");
+            if (!method) {
+              trace.lineDeliveryStatus = "failed";
+              throw new Error("LINE inspection result delivery failed");
+            }
+            trace.lineDeliveryStatus = "sent";
+            trace.lineDeliveryMethod = method;
           }
         }
+        trace.lineDeliveryStatus ??=
+          result.evidence ? "pending" : "not_applicable";
         try {
           await markImageProcessed(job, operationalState);
         } catch (error) {
