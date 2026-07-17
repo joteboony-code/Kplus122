@@ -37,10 +37,8 @@ import {
   downloadLineImage,
   imageJobFromEvent,
   referenceCodeFromEvent,
-  sendReplyMessages,
   sendInspectionPushResult,
   sendInspectionResultWithMethod,
-  serviceLookJobFromEvent,
   verifyLineSignature,
 } from "./line";
 import { hasRecentPass, recordRecentPass } from "./reply-state";
@@ -53,10 +51,6 @@ import {
 export { ReceiptRoundCoordinator } from "./receipt-round-coordinator";
 export { OperationalCounterCoordinator } from "./operational-counters";
 import { d1StateStore, purgeExpiredState } from "./state-store";
-import {
-  fetchCastleServiceSnapshot,
-  formatCastleServiceReplies,
-} from "./service-look";
 import {
   isRoundFinalizeJob,
   type ImageJob,
@@ -221,35 +215,6 @@ async function replyKplusSuccess(
   return { outcome: "pass" };
 }
 
-async function handleServiceLookCommand(job: ImageJob, env: Env): Promise<void> {
-  let replies: string[];
-  try {
-    const snapshot = await fetchCastleServiceSnapshot(
-      env.CASTLE_SERVICE,
-    );
-    replies = formatCastleServiceReplies(snapshot);
-  } catch (error) {
-    console.error(JSON.stringify({
-      event: "service_look_failed",
-      webhookEventId: job.webhookEventId,
-      error: error instanceof Error ? error.message : "unknown error",
-    }));
-    replies = ["Service-look\nไม่สามารถอ่านรายการงาน Service ได้ กรุณาลองใหม่อีกครั้ง"];
-  }
-
-  const sent = await sendReplyMessages(
-    job,
-    replies,
-    env.LINE_CHANNEL_ACCESS_TOKEN,
-  );
-  console.log(JSON.stringify({
-    event: "service_look_replied",
-    webhookEventId: job.webhookEventId,
-    sent,
-    messageCount: replies.length,
-  }));
-}
-
 async function handleWebhook(request: Request, env: Env): Promise<Response> {
   const signature = request.headers.get("x-line-signature");
   if (!signature) return new Response("Missing signature", { status: 401 });
@@ -269,12 +234,6 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
   const operationalState = d1StateStore(env.CONTROL_DB);
   const jobs: ImageJob[] = [];
   for (const event of payload.events ?? []) {
-    const serviceLookJob = serviceLookJobFromEvent(event);
-    if (serviceLookJob) {
-      await handleServiceLookCommand(serviceLookJob, env);
-      continue;
-    }
-
     const scope = conversationAndSenderFromEvent(event);
     const referenceCode = referenceCodeFromEvent(event);
     if (scope && referenceCode) {

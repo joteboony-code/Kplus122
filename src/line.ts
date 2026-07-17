@@ -75,31 +75,6 @@ export function referenceCodeFromEvent(event: LineWebhookEvent): string | null {
   return match?.[1] ?? null;
 }
 
-export function serviceLookJobFromEvent(event: LineWebhookEvent): ImageJob | null {
-  if (
-    event.type !== "message" ||
-    event.message?.type !== "text" ||
-    event.message.text?.trim().toLowerCase() !== "service-look" ||
-    !event.message.id ||
-    !event.replyToken ||
-    !event.webhookEventId
-  ) {
-    return null;
-  }
-
-  return {
-    webhookEventId: event.webhookEventId,
-    messageId: event.message.id,
-    replyToken: event.replyToken,
-    quoteToken: event.message.quoteToken,
-    replyTarget:
-      event.source?.groupId ?? event.source?.roomId ?? event.source?.userId,
-    sourceType: event.source?.type,
-    senderUserId: event.source?.userId,
-    timestamp: event.timestamp,
-  };
-}
-
 export function conversationAndSenderFromEvent(
   event: LineWebhookEvent,
 ): { conversationId: string; senderId: string } | null {
@@ -219,23 +194,6 @@ function inspectionMessage(job: ImageJob, text: string): object {
 
 function isPassingInspectionResult(text: string): boolean {
   return PASS_RESULT_PATTERN.test(text.trimStart());
-}
-
-export async function sendReplyMessages(
-  job: ImageJob,
-  texts: string[],
-  channelAccessToken: string,
-): Promise<boolean> {
-  if (texts.length < 1 || texts.length > 5) {
-    throw new Error("LINE reply requires 1-5 messages");
-  }
-  const messages = texts.map((text, index) =>
-    index === 0 ? inspectionMessage(job, text) : { type: "text", text }
-  );
-  return postLineMessage("/v2/bot/message/reply", channelAccessToken, {
-    replyToken: job.replyToken,
-    messages,
-  });
 }
 
 export async function sendInspectionResult(
