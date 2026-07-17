@@ -143,8 +143,8 @@ describe("LINE webhook", () => {
     expect(payload.messages[0]).toEqual({ type: "text", text: "ผลตรวจ" });
   });
 
-  it("keeps LINE silent when the slip inspection passes", async () => {
-    const fetchMock = vi.fn();
+  it("replies when the slip inspection passes", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
 
     const handled = await sendInspectionResult({
@@ -157,7 +157,8 @@ describe("LINE webhook", () => {
     }, "✅ ตรวจสอบผ่าน: พบสลิป KPLUS ยอด 1.22 บาท ข้อมูลถูกต้อง", "channel-token", true);
 
     expect(handled).toBe(true);
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("https://api.line.me/v2/bot/message/reply");
   });
 
   it("uses push for an end-of-round summary", async () => {

@@ -3,7 +3,6 @@ import type { ImageJob, LineWebhookEvent } from "./types";
 const LINE_API = "https://api.line.me";
 const LINE_DATA_API = "https://api-data.line.me";
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
-const PASS_RESULT_PATTERN = /^(?:✅\s*)?ตรวจสอบผ่าน:/;
 
 function decodeBase64(value: string): Uint8Array {
   const decoded = atob(value);
@@ -192,10 +191,6 @@ function inspectionMessage(job: ImageJob, text: string): object {
     : { type: "text", text, ...quote };
 }
 
-function isPassingInspectionResult(text: string): boolean {
-  return PASS_RESULT_PATTERN.test(text.trimStart());
-}
-
 export async function sendInspectionResult(
   job: ImageJob,
   text: string,
@@ -216,17 +211,6 @@ export async function sendInspectionResultWithMethod(
   channelAccessToken: string,
   enablePushFallback: boolean,
 ): Promise<"reply" | "push" | null> {
-  if (isPassingInspectionResult(text)) {
-    // Treat a passing result as handled so pass bookkeeping can complete,
-    // but intentionally keep LINE silent. Only failed inspections are sent.
-    console.log(JSON.stringify({
-      event: "line_success_notification_suppressed",
-      webhookEventId: job.webhookEventId,
-      messageId: job.messageId,
-    }));
-    return "reply";
-  }
-
   const message = inspectionMessage(job, text);
 
   const replied = await postLineMessage(
