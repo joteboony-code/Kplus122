@@ -3,9 +3,11 @@ import {
   conversationAndSenderFromEvent,
   imageJobFromEvent,
   referenceCodeFromEvent,
+  sendReplyMessages,
   sendInspectionPushResult,
   sendInspectionResult,
   sendInspectionResultWithMethod,
+  serviceLookJobFromEvent,
   verifyLineSignature,
 } from "../src/line";
 
@@ -87,6 +89,27 @@ describe("LINE webhook", () => {
     expect(referenceCodeFromEvent({
       ...event,
       message: { type: "text", text: "1234567" },
+    })).toBeNull();
+  });
+
+  it("accepts Service-look as an exact case-insensitive command", () => {
+    const event = {
+      type: "message",
+      webhookEventId: "event-service-look",
+      replyToken: "reply-service-look",
+      source: { type: "group" as const, groupId: "group-1", userId: "user-1" },
+      message: { id: "text-1", type: "text", text: "  SERVICE-LOOK  " },
+    };
+
+    expect(serviceLookJobFromEvent(event)).toMatchObject({
+      messageId: "text-1",
+      replyToken: "reply-service-look",
+      replyTarget: "group-1",
+      senderUserId: "user-1",
+    });
+    expect(serviceLookJobFromEvent({
+      ...event,
+      message: { ...event.message, text: "please Service-look" },
     })).toBeNull();
   });
 
@@ -175,6 +198,30 @@ describe("LINE webhook", () => {
 
     expect(sent).toBe(true);
     expect(fetchMock.mock.calls[0]?.[0]).toBe("https://api.line.me/v2/bot/message/push");
+  });
+
+  it("sends Service-look output only through one reply request", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const sent = await sendReplyMessages({
+      webhookEventId: "event-service-look",
+      messageId: "text-1",
+      replyToken: "reply-token",
+      replyTarget: "group-1",
+      sourceType: "group",
+      senderUserId: "U123",
+    }, ["first page", "second page"], "channel-token");
+
+    expect(sent).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("https://api.line.me/v2/bot/message/reply");
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const payload = JSON.parse(String(init.body)) as {
+      messages: Array<{ type: string; text: string }>;
+    };
+    expect(payload.messages).toHaveLength(2);
+    expect(payload.messages[1]).toEqual({ type: "text", text: "second page" });
   });
 
   it("reports delivery failure when reply and fallback are unavailable", async () => {

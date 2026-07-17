@@ -6,6 +6,21 @@ export default defineConfig({
     cloudflareTest({
       remoteBindings: false,
       wrangler: { configPath: "./wrangler.jsonc" },
+      miniflare: {
+        workers: [
+          {
+            name: "serviceeast",
+            modules: true,
+            script: `
+              import { WorkerEntrypoint } from "cloudflare:workers";
+              export class ServiceLookup extends WorkerEntrypoint {
+                async getCurrentJobs() { return { checkedAt: "", totalJobs: 0, jobs: [] }; }
+              }
+              export default { fetch() { return new Response("test service"); } };
+            `,
+          },
+        ],
+      },
     }),
   ],
 });
