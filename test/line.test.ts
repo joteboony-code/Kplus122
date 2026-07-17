@@ -143,6 +143,23 @@ describe("LINE webhook", () => {
     expect(payload.messages[0]).toEqual({ type: "text", text: "ผลตรวจ" });
   });
 
+  it("keeps LINE silent when the slip inspection passes", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const handled = await sendInspectionResult({
+      webhookEventId: "event-pass",
+      messageId: "image-pass",
+      replyToken: "reply-token",
+      replyTarget: "group-1",
+      sourceType: "group",
+      senderUserId: "U123",
+    }, "✅ ตรวจสอบผ่าน: พบสลิป KPLUS ยอด 1.22 บาท ข้อมูลถูกต้อง", "channel-token", true);
+
+    expect(handled).toBe(true);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("uses push for an end-of-round summary", async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
