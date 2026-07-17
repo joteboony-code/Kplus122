@@ -32,9 +32,23 @@ jobs:
         run: npm ci
 
       - name: Run checks
-        run: npm run check
+        id: checks
+        shell: bash
+        run: |
+          set -o pipefail
+          npm run check 2>&1 | tee check.log
+
+      - name: Upload check log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: deploy-check-log
+          path: check.log
+          if-no-files-found: ignore
+          retention-days: 1
 
       - name: Deploy Worker
+        if: steps.checks.outcome == 'success'
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
