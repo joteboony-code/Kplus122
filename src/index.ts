@@ -37,8 +37,10 @@ import {
   downloadLineImage,
   imageJobFromEvent,
   referenceCodeFromEvent,
+  sendReplyMessages,
   sendInspectionPushResult,
   sendInspectionResultWithMethod,
+  serviceLookContextFromEvent,
   verifyLineSignature,
 } from "./line";
 import { hasRecentPass, recordRecentPass } from "./reply-state";
@@ -52,8 +54,16 @@ export { ReceiptRoundCoordinator } from "./receipt-round-coordinator";
 export { OperationalCounterCoordinator } from "./operational-counters";
 import { d1StateStore, purgeExpiredState } from "./state-store";
 import {
+  fetchCastleServiceSnapshot,
+  formatServiceLookMessages,
+  loadSeenServiceJobKeys,
+  saveSeenServiceJobs,
+  selectNewServiceJobs,
+} from "./service-look";
+import {
   isRoundFinalizeJob,
   type ImageJob,
+  type LineReplyContext,
   type LineWebhookBody,
   type QueueJob,
   type RoundFinalizeJob,
@@ -66,6 +76,85 @@ interface ProcessResult {
 }
 
 const IGNORED_RESULT: ProcessResult = { outcome: "ignored" };
+
+async function handleServiceLookCommand(
+  context: LineReplyContext,
+  env: Env,
+): Promise<void> {
+  const conversationId = context.replyTarget;
+  if (!conversationId) {
+    console.warn(JSON.stringify({
+      event: "service_look_ignored",
+      webhookEventId: context.webhookEventId,
+      reason: "missing-conversation-id",
+    }));
+    return;
+  }
+
+  const store = d1StateStore(env.CONTROL_DB);
+  let snapshot: Awaited<ReturnType<typeof fetchCastleServiceSnapshot>>;
+  let seen: Awaited<ReturnType<typeof loadSeenServiceJobKeys>>;
+  let result: ReturnType<typeof formatServiceLookMessages>;
+  try {
+    snapshot = await fetchCastleServiceSnapshot(env.CASTLE_SERVICE);
+    seen = await loadSeenServiceJobKeys(store, conversationId);
+    result = formatServiceLookMessages(
+      snapshot,
+      selectNewServiceJobs(snapshot, seen),
+    );
+  } catch (error) {
+    console.error(JSON.stringify({
+      event: "service_look_read_failed",
+      webhookEventId: context.webhookEventId,
+      error: error instanceof Error ? error.message : "unknown error",
+    }));
+    await sendReplyMessages(
+      context,
+      [{
+        type: "text",
+        text: "ไม่สามารถอ่านรายการงาน Service ได้ กรุณาลองใหม่อีกครั้ง",
+      }],
+      env.LINE_CHANNEL_ACCESS_TOKEN,
+    );
+    return;
+  }
+
+  const sent = await sendReplyMessages(
+    context,
+    result.messages,
+    env.LINE_CHANNEL_ACCESS_TOKEN,
+  );
+  if (!sent) {
+    console.error(JSON.stringify({
+      event: "service_look_reply_failed",
+      webhookEventId: context.webhookEventId,
+    }));
+    return;
+  }
+
+  try {
+    await saveSeenServiceJobs(
+      store,
+      conversationId,
+      snapshot,
+      seen,
+      result.displayedJobs,
+    );
+    console.log(JSON.stringify({
+      event: "service_look_replied",
+      webhookEventId: context.webhookEventId,
+      activeJobs: snapshot.totalJobs,
+      newJobs: result.displayedJobs.length,
+      messageCount: result.messages.length,
+    }));
+  } catch (error) {
+    console.warn(JSON.stringify({
+      event: "service_look_state_save_failed",
+      webhookEventId: context.webhookEventId,
+      error: error instanceof Error ? error.message : "unknown error",
+    }));
+  }
+}
 
 async function timedProvider<T>(
   trace: InspectionTrace,
@@ -234,6 +323,12 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
   const operationalState = d1StateStore(env.CONTROL_DB);
   const jobs: ImageJob[] = [];
   for (const event of payload.events ?? []) {
+    const serviceLookContext = serviceLookContextFromEvent(event);
+    if (serviceLookContext) {
+      await handleServiceLookCommand(serviceLookContext, env);
+      continue;
+    }
+
     const scope = conversationAndSenderFromEvent(event);
     const referenceCode = referenceCodeFromEvent(event);
     if (scope && referenceCode) {

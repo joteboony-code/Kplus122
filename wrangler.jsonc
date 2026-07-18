@@ -11,6 +11,13 @@
     "binding": "AI",
     "remote": true
   },
+  "services": [
+    {
+      "binding": "CASTLE_SERVICE",
+      "service": "serviceeast",
+      "entrypoint": "ServiceLookup"
+    }
+  ],
   "d1_databases": [
     {
       "binding": "CONTROL_DB",

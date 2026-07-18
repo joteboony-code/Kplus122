@@ -1,8 +1,32 @@
-import type { ImageJob, LineWebhookEvent } from "./types";
+import type {
+  ImageJob,
+  LineReplyContext,
+  LineWebhookEvent,
+} from "./types";
 
 const LINE_API = "https://api.line.me";
 const LINE_DATA_API = "https://api-data.line.me";
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
+const SERVICE_LOOK_POSTBACK_DATA = "action=service-look";
+
+function serviceLookQuickReply(): Record<string, unknown> {
+  return {
+    items: [{
+      type: "action",
+      action: {
+        type: "postback",
+        label: "🔍 ตรวจงาน Service",
+        data: SERVICE_LOOK_POSTBACK_DATA,
+      },
+    }],
+  };
+}
+
+function withServiceLookQuickReply(
+  message: Record<string, unknown>,
+): Record<string, unknown> {
+  return { ...message, quickReply: serviceLookQuickReply() };
+}
 
 function decodeBase64(value: string): Uint8Array {
   const decoded = atob(value);
@@ -72,6 +96,35 @@ export function referenceCodeFromEvent(event: LineWebhookEvent): string | null {
   if (event.type !== "message" || event.message?.type !== "text") return null;
   const match = event.message.text?.match(/^\s*(\d{8})\s*$/);
   return match?.[1] ?? null;
+}
+
+export function serviceLookContextFromEvent(
+  event: LineWebhookEvent,
+): LineReplyContext | null {
+  const isTextCommand =
+    event.type === "message" &&
+    event.message?.type === "text" &&
+    event.message.text?.trim().toLowerCase() === "service-look";
+  const isQuickReply =
+    event.type === "postback" &&
+    event.postback?.data === SERVICE_LOOK_POSTBACK_DATA;
+  if (
+    (!isTextCommand && !isQuickReply) ||
+    !event.replyToken ||
+    !event.webhookEventId
+  ) {
+    return null;
+  }
+
+  return {
+    webhookEventId: event.webhookEventId,
+    replyToken: event.replyToken,
+    replyTarget:
+      event.source?.groupId ?? event.source?.roomId ?? event.source?.userId,
+    sourceType: event.source?.type,
+    senderUserId: event.source?.userId,
+    timestamp: event.timestamp,
+  };
 }
 
 export function conversationAndSenderFromEvent(
@@ -176,7 +229,7 @@ function inspectionMessage(job: ImageJob, text: string): object {
     (job.sourceType === "group" || job.sourceType === "room") &&
     Boolean(job.senderUserId);
   const quote = job.quoteToken ? { quoteToken: job.quoteToken } : {};
-  return canMentionSender
+  const message = canMentionSender
     ? {
         type: "textV2",
         text: `{sender}\n${text}`,
@@ -189,6 +242,26 @@ function inspectionMessage(job: ImageJob, text: string): object {
         },
       }
     : { type: "text", text, ...quote };
+  return withServiceLookQuickReply(message);
+}
+
+export async function sendReplyMessages(
+  context: LineReplyContext,
+  messages: Record<string, unknown>[],
+  channelAccessToken: string,
+): Promise<boolean> {
+  if (messages.length < 1 || messages.length > 5) {
+    throw new Error("LINE reply requires 1-5 messages");
+  }
+  const withQuickReply = messages.map((message, index) =>
+    index === messages.length - 1
+      ? withServiceLookQuickReply(message)
+      : message
+  );
+  return postLineMessage("/v2/bot/message/reply", channelAccessToken, {
+    replyToken: context.replyToken,
+    messages: withQuickReply,
+  });
 }
 
 export async function sendInspectionResult(

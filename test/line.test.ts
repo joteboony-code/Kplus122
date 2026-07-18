@@ -3,9 +3,11 @@ import {
   conversationAndSenderFromEvent,
   imageJobFromEvent,
   referenceCodeFromEvent,
+  sendReplyMessages,
   sendInspectionPushResult,
   sendInspectionResult,
   sendInspectionResultWithMethod,
+  serviceLookContextFromEvent,
   verifyLineSignature,
 } from "../src/line";
 
@@ -90,6 +92,29 @@ describe("LINE webhook", () => {
     })).toBeNull();
   });
 
+  it("accepts the Service-look quick reply postback and text command", () => {
+    const base = {
+      webhookEventId: "event-service",
+      replyToken: "reply-service",
+      source: { type: "group" as const, groupId: "group-1", userId: "user-1" },
+    };
+    expect(serviceLookContextFromEvent({
+      ...base,
+      type: "postback",
+      postback: { data: "action=service-look" },
+    })).toMatchObject({ replyTarget: "group-1", senderUserId: "user-1" });
+    expect(serviceLookContextFromEvent({
+      ...base,
+      type: "message",
+      message: { type: "text", text: " SERVICE-LOOK " },
+    })).not.toBeNull();
+    expect(serviceLookContextFromEvent({
+      ...base,
+      type: "postback",
+      postback: { data: "action=other" },
+    })).toBeNull();
+  });
+
   it("mentions the image sender in a group reply", async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
@@ -140,7 +165,42 @@ describe("LINE webhook", () => {
     const payload = JSON.parse(String(init.body)) as {
       messages: Array<{ type: string; text: string }>;
     };
-    expect(payload.messages[0]).toEqual({ type: "text", text: "ผลตรวจ" });
+    expect(payload.messages[0]).toMatchObject({
+      type: "text",
+      text: "ผลตรวจ",
+      quickReply: {
+        items: [{
+          action: {
+            type: "postback",
+            label: "🔍 ตรวจงาน Service",
+            data: "action=service-look",
+          },
+        }],
+      },
+    });
+  });
+
+  it("adds the Service quick reply only to the last reply message", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await sendReplyMessages({
+      webhookEventId: "event-service",
+      replyToken: "reply-token",
+      replyTarget: "group-1",
+      sourceType: "group",
+      senderUserId: "U123",
+    }, [
+      { type: "text", text: "first" },
+      { type: "text", text: "last" },
+    ], "channel-token");
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const payload = JSON.parse(String(init.body)) as {
+      messages: Array<Record<string, unknown>>;
+    };
+    expect(payload.messages[0]).not.toHaveProperty("quickReply");
+    expect(payload.messages[1]).toHaveProperty("quickReply");
   });
 
   it("replies when the slip inspection passes", async () => {

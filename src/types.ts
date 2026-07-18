@@ -28,17 +28,24 @@ export interface LineWebhookEvent {
       total?: number;
     };
   };
+  postback?: {
+    data?: string;
+    params?: Record<string, string>;
+  };
 }
 
-export interface ImageJob {
+export interface LineReplyContext {
   webhookEventId: string;
-  messageId: string;
   replyToken: string;
-  quoteToken?: string;
   replyTarget?: string;
   sourceType?: "user" | "group" | "room";
   senderUserId?: string;
   timestamp?: number;
+}
+
+export interface ImageJob extends LineReplyContext {
+  messageId: string;
+  quoteToken?: string;
   imageSetId?: string;
   imageSetIndex?: number;
   imageSetTotal?: number;
