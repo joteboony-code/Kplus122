@@ -8,6 +8,13 @@ const LINE_API = "https://api.line.me";
 const LINE_DATA_API = "https://api-data.line.me";
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 const SERVICE_LOOK_POSTBACK_DATA = "action=service-look";
+const SERVICE_LOOK_TEXT_COMMANDS = new Set([
+  "service-look",
+  "เช็กงาน",
+  "เช็คงาน",
+  "เช็กservice",
+  "เช็คservice",
+]);
 
 function serviceLookQuickReply(): Record<string, unknown> {
   return {
@@ -101,10 +108,14 @@ export function referenceCodeFromEvent(event: LineWebhookEvent): string | null {
 export function serviceLookContextFromEvent(
   event: LineWebhookEvent,
 ): LineReplyContext | null {
+  const normalizedTextCommand = event.message?.type === "text"
+    ? event.message.text?.trim().toLowerCase().replace(/\s+/g, "")
+    : undefined;
   const isTextCommand =
     event.type === "message" &&
     event.message?.type === "text" &&
-    event.message.text?.trim().toLowerCase() === "service-look";
+    normalizedTextCommand !== undefined &&
+    SERVICE_LOOK_TEXT_COMMANDS.has(normalizedTextCommand);
   const isQuickReply =
     event.type === "postback" &&
     event.postback?.data === SERVICE_LOOK_POSTBACK_DATA;

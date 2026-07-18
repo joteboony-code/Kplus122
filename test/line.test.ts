@@ -108,6 +108,20 @@ describe("LINE webhook", () => {
       type: "message",
       message: { type: "text", text: " SERVICE-LOOK " },
     })).not.toBeNull();
+    for (const command of [
+      "เช็กงาน",
+      "เช็คงาน",
+      "เช็กservice",
+      "เช็คservice",
+      "เช็ก service",
+      "เช็ค service",
+    ]) {
+      expect(serviceLookContextFromEvent({
+        ...base,
+        type: "message",
+        message: { type: "text", text: command },
+      })).not.toBeNull();
+    }
     expect(serviceLookContextFromEvent({
       ...base,
       type: "postback",
