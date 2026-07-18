@@ -8,6 +8,7 @@ const LINE_API = "https://api.line.me";
 const LINE_DATA_API = "https://api-data.line.me";
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 const SERVICE_LOOK_POSTBACK_DATA = "action=service-look";
+const SERVICE_LOOK_ALL_POSTBACK_DATA = "action=service-look-all";
 const SERVICE_LOOK_TEXT_COMMANDS = new Set([
   "service-look",
   "เช็กงาน",
@@ -18,14 +19,24 @@ const SERVICE_LOOK_TEXT_COMMANDS = new Set([
 
 function serviceLookQuickReply(): Record<string, unknown> {
   return {
-    items: [{
-      type: "action",
-      action: {
-        type: "postback",
-        label: "🔍 ตรวจงาน Service",
-        data: SERVICE_LOOK_POSTBACK_DATA,
+    items: [
+      {
+        type: "action",
+        action: {
+          type: "postback",
+          label: "🔍 ตรวจงาน Service",
+          data: SERVICE_LOOK_POSTBACK_DATA,
+        },
       },
-    }],
+      {
+        type: "action",
+        action: {
+          type: "postback",
+          label: "งาน Service ทั้งหมด",
+          data: SERVICE_LOOK_ALL_POSTBACK_DATA,
+        },
+      },
+    ],
   };
 }
 
@@ -105,9 +116,13 @@ export function referenceCodeFromEvent(event: LineWebhookEvent): string | null {
   return match?.[1] ?? null;
 }
 
+export interface ServiceLookContext extends LineReplyContext {
+  serviceLookMode: "new" | "all";
+}
+
 export function serviceLookContextFromEvent(
   event: LineWebhookEvent,
-): LineReplyContext | null {
+): ServiceLookContext | null {
   const normalizedTextCommand = event.message?.type === "text"
     ? event.message.text?.trim().toLowerCase().replace(/\s+/g, "")
     : undefined;
@@ -116,11 +131,14 @@ export function serviceLookContextFromEvent(
     event.message?.type === "text" &&
     normalizedTextCommand !== undefined &&
     SERVICE_LOOK_TEXT_COMMANDS.has(normalizedTextCommand);
-  const isQuickReply =
+  const isNewQuickReply =
     event.type === "postback" &&
     event.postback?.data === SERVICE_LOOK_POSTBACK_DATA;
+  const isAllQuickReply =
+    event.type === "postback" &&
+    event.postback?.data === SERVICE_LOOK_ALL_POSTBACK_DATA;
   if (
-    (!isTextCommand && !isQuickReply) ||
+    (!isTextCommand && !isNewQuickReply && !isAllQuickReply) ||
     !event.replyToken ||
     !event.webhookEventId
   ) {
@@ -135,6 +153,7 @@ export function serviceLookContextFromEvent(
     sourceType: event.source?.type,
     senderUserId: event.source?.userId,
     timestamp: event.timestamp,
+    serviceLookMode: isAllQuickReply ? "all" : "new",
   };
 }
 

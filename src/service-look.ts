@@ -207,6 +207,7 @@ function jobBubble(job: CastleServiceJob): Record<string, unknown> {
 export function formatServiceLookMessages(
   snapshot: CastleServiceSnapshot,
   newJobs: CastleServiceJob[],
+  mode: "new" | "all" = "new",
 ): ServiceLookMessages {
   const displayedJobs = newJobs.slice(
     0,
@@ -217,7 +218,9 @@ export function formatServiceLookMessages(
       displayedJobs,
       messages: [{
         type: "text",
-        text: `ไม่พบงาน Service ใหม่\nงานที่กำลังเปิดอยู่ ${snapshot.totalJobs} งาน`,
+        text: mode === "all"
+          ? "ไม่พบงาน Service ที่กำลังเปิดอยู่"
+          : `ไม่พบงาน Service ใหม่\nงานที่กำลังเปิดอยู่ ${snapshot.totalJobs} งาน`,
       }],
     };
   }
@@ -227,7 +230,9 @@ export function formatServiceLookMessages(
     const page = displayedJobs.slice(index, index + MAX_BUBBLES_PER_CAROUSEL);
     messages.push({
       type: "flex",
-      altText: `พบงาน Service ใหม่ ${displayedJobs.length} งาน`,
+      altText: mode === "all"
+        ? `งาน Service ทั้งหมด ${displayedJobs.length} งาน`
+        : `พบงาน Service ใหม่ ${displayedJobs.length} งาน`,
       contents: {
         type: "carousel",
         contents: page.map(jobBubble),

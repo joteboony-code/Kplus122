@@ -108,4 +108,30 @@ describe("Service-look", () => {
       text: "ไม่พบงาน Service ใหม่\nงานที่กำลังเปิดอยู่ 3 งาน",
     }]);
   });
+
+  it("formats all active jobs without a new-job label", () => {
+    const jobs = [job(1), job(2)];
+    const result = formatServiceLookMessages(
+      { checkedAt: "", totalJobs: jobs.length, jobs },
+      jobs,
+      "all",
+    );
+    expect(result.displayedJobs).toEqual(jobs);
+    expect(result.messages[0]).toMatchObject({
+      type: "flex",
+      altText: "งาน Service ทั้งหมด 2 งาน",
+    });
+  });
+
+  it("reports when there are no active jobs in all mode", () => {
+    const result = formatServiceLookMessages(
+      { checkedAt: "", totalJobs: 0, jobs: [] },
+      [],
+      "all",
+    );
+    expect(result.messages).toEqual([{
+      type: "text",
+      text: "ไม่พบงาน Service ที่กำลังเปิดอยู่",
+    }]);
+  });
 });

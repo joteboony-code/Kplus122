@@ -102,7 +102,20 @@ describe("LINE webhook", () => {
       ...base,
       type: "postback",
       postback: { data: "action=service-look" },
-    })).toMatchObject({ replyTarget: "group-1", senderUserId: "user-1" });
+    })).toMatchObject({
+      replyTarget: "group-1",
+      senderUserId: "user-1",
+      serviceLookMode: "new",
+    });
+    expect(serviceLookContextFromEvent({
+      ...base,
+      type: "postback",
+      postback: { data: "action=service-look-all" },
+    })).toMatchObject({
+      replyTarget: "group-1",
+      senderUserId: "user-1",
+      serviceLookMode: "all",
+    });
     expect(serviceLookContextFromEvent({
       ...base,
       type: "message",
@@ -183,13 +196,22 @@ describe("LINE webhook", () => {
       type: "text",
       text: "ผลตรวจ",
       quickReply: {
-        items: [{
-          action: {
-            type: "postback",
-            label: "🔍 ตรวจงาน Service",
-            data: "action=service-look",
+        items: [
+          {
+            action: {
+              type: "postback",
+              label: "🔍 ตรวจงาน Service",
+              data: "action=service-look",
+            },
           },
-        }],
+          {
+            action: {
+              type: "postback",
+              label: "งาน Service ทั้งหมด",
+              data: "action=service-look-all",
+            },
+          },
+        ],
       },
     });
   });

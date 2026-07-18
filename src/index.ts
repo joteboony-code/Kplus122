@@ -42,6 +42,7 @@ import {
   sendInspectionResultWithMethod,
   serviceLookContextFromEvent,
   verifyLineSignature,
+  type ServiceLookContext,
 } from "./line";
 import { hasRecentPass, recordRecentPass } from "./reply-state";
 import { isImageProcessed, markImageProcessed } from "./processing-state";
@@ -63,7 +64,6 @@ import {
 import {
   isRoundFinalizeJob,
   type ImageJob,
-  type LineReplyContext,
   type LineWebhookBody,
   type QueueJob,
   type RoundFinalizeJob,
@@ -78,7 +78,7 @@ interface ProcessResult {
 const IGNORED_RESULT: ProcessResult = { outcome: "ignored" };
 
 async function handleServiceLookCommand(
-  context: LineReplyContext,
+  context: ServiceLookContext,
   env: Env,
 ): Promise<void> {
   const conversationId = context.replyTarget;
@@ -93,15 +93,19 @@ async function handleServiceLookCommand(
 
   const store = d1StateStore(env.CONTROL_DB);
   let snapshot: Awaited<ReturnType<typeof fetchCastleServiceSnapshot>>;
-  let seen: Awaited<ReturnType<typeof loadSeenServiceJobKeys>>;
+  let seen: Awaited<ReturnType<typeof loadSeenServiceJobKeys>> | null = null;
   let result: ReturnType<typeof formatServiceLookMessages>;
   try {
     snapshot = await fetchCastleServiceSnapshot(env.CASTLE_SERVICE);
-    seen = await loadSeenServiceJobKeys(store, conversationId);
-    result = formatServiceLookMessages(
-      snapshot,
-      selectNewServiceJobs(snapshot, seen),
-    );
+    if (context.serviceLookMode === "all") {
+      result = formatServiceLookMessages(snapshot, snapshot.jobs, "all");
+    } else {
+      seen = await loadSeenServiceJobKeys(store, conversationId);
+      result = formatServiceLookMessages(
+        snapshot,
+        selectNewServiceJobs(snapshot, seen),
+      );
+    }
   } catch (error) {
     console.error(JSON.stringify({
       event: "service_look_read_failed",
@@ -128,6 +132,17 @@ async function handleServiceLookCommand(
     console.error(JSON.stringify({
       event: "service_look_reply_failed",
       webhookEventId: context.webhookEventId,
+    }));
+    return;
+  }
+
+  if (context.serviceLookMode === "all" || !seen) {
+    console.log(JSON.stringify({
+      event: "service_look_all_replied",
+      webhookEventId: context.webhookEventId,
+      activeJobs: snapshot.totalJobs,
+      displayedJobs: result.displayedJobs.length,
+      messageCount: result.messages.length,
     }));
     return;
   }
