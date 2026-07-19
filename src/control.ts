@@ -9,6 +9,14 @@ import {
   listInspectionLogs,
   type InspectionLogRow,
 } from "./audit-log";
+import {
+  deleteServiceAreaMention,
+  getServiceAreaMention,
+  listServiceAreaMentions,
+  saveServiceAreaMention,
+  type ServiceAreaMention,
+  type ServiceAreaMentionInput,
+} from "./service-technicians";
 
 const PROCESSING_ENABLED_KEY = "control:processing-enabled";
 const SESSION_COOKIE = "kplus_control_session";
@@ -32,13 +40,17 @@ function htmlResponse(body: string, status = 200, extraHeaders: HeadersInit = {}
   });
 }
 
-function redirectToControl(cookie?: string): Response {
+function redirectTo(path: string, cookie?: string): Response {
   const headers = new Headers({
-    Location: "/control",
+    Location: path,
     ...securityHeaders("text/plain; charset=utf-8"),
   });
   if (cookie) headers.set("Set-Cookie", cookie);
   return new Response("Redirecting", { status: 303, headers });
+}
+
+function redirectToControl(cookie?: string): Response {
+  return redirectTo("/control", cookie);
 }
 
 function bytesToBase64Url(bytes: Uint8Array): string {
@@ -197,6 +209,73 @@ function escapeHtml(value: string): string {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#39;");
+}
+
+function technicianForm(
+  mention?: ServiceAreaMention,
+  draft?: Partial<ServiceAreaMentionInput>,
+): string {
+  const value = {
+    technicianName: draft?.technicianName ?? mention?.technicianName ?? "",
+    lineUserId: draft?.lineUserId ?? mention?.lineUserId ?? "",
+    province: draft?.province ?? mention?.province ?? "",
+    district: draft?.district ?? mention?.district ?? "",
+    enabled: draft?.enabled ?? mention?.enabled ?? true,
+  };
+  const idInput = mention
+    ? `<input type="hidden" name="id" value="${mention.id}">`
+    : "";
+  return `<form class="technician-form" method="post" action="/control/technicians/save">
+    ${idInput}
+    <label><span>ชื่อช่าง</span><input name="technicianName" value="${escapeHtml(value.technicianName)}" maxlength="100" required placeholder="เช่น ช่างโจ"></label>
+    <label><span>LINE User ID</span><input name="lineUserId" value="${escapeHtml(value.lineUserId)}" maxlength="64" required placeholder="Uxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"></label>
+    <label><span>จังหวัด</span><input name="province" value="${escapeHtml(value.province)}" maxlength="80" required placeholder="ชลบุรี"></label>
+    <label><span>อำเภอ</span><input name="district" value="${escapeHtml(value.district)}" maxlength="80" required placeholder="พานทอง"></label>
+    <label class="enabled"><input type="checkbox" name="enabled" value="true"${value.enabled ? " checked" : ""}><span>เปิดใช้งานการแท็ก</span></label>
+    <div class="form-actions"><button class="save" type="submit">${mention ? "บันทึกการแก้ไข" : "เพิ่มช่างและพื้นที่"}</button>${mention ? `<a class="delete" href="/control/technicians/delete?id=${mention.id}">ลบ</a>` : ""}</div>
+  </form>`;
+}
+
+function techniciansPage(
+  mentions: ServiceAreaMention[],
+  error = "",
+  draft?: Partial<ServiceAreaMentionInput>,
+): string {
+  const rows = mentions.length === 0
+    ? '<div class="empty">ยังไม่มีข้อมูลช่างและพื้นที่รับผิดชอบ</div>'
+    : mentions.map((mention) => `<details class="technician-card"${mentions.length === 1 ? " open" : ""}>
+        <summary><span><b>${escapeHtml(mention.technicianName)}</b><small>${escapeHtml(mention.district)} / ${escapeHtml(mention.province)}</small></span><i class="${mention.enabled ? "on" : "off"}">${mention.enabled ? "เปิดใช้งาน" : "ปิดใช้งาน"}</i></summary>
+        ${technicianForm(mention)}
+      </details>`).join("");
+  const errorBlock = error
+    ? `<div class="alert" role="alert">${escapeHtml(error)}</div>`
+    : "";
+  return `<!doctype html><html lang="th"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>จัดการช่างและพื้นที่ · KPLUS Control</title><style>
+    :root{color-scheme:dark;font-family:Inter,"Noto Sans Thai",system-ui,sans-serif;background:#07100c;color:#f1fff7}*{box-sizing:border-box}body{margin:0;min-height:100vh;padding:20px;background:radial-gradient(circle at 15% 0,#163e29 0,transparent 36%),#07100c}.shell{width:min(100%,820px);margin:20px auto}.top{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:20px}.top a{color:#9ff3bd;text-decoration:none;font-weight:800}.top h1{margin:0;font-size:clamp(24px,5vw,34px)}.intro{margin:0 0 22px;color:#91aa9c;line-height:1.6}.panel{padding:22px;border:1px solid #2f7350;border-radius:22px;background:#0d1c15;box-shadow:0 24px 70px #0006}.panel h2{margin:0 0 15px;font-size:18px}.alert{margin-bottom:16px;padding:12px 14px;border:1px solid #9d4350;border-radius:11px;background:#421a21;color:#ffb4bf}.technician-form{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.technician-form label>span{display:block;margin-bottom:6px;color:#9ab2a5;font-size:12px;font-weight:800}.technician-form input:not([type=checkbox]){width:100%;padding:11px 12px;border:1px solid #355343;border-radius:10px;background:#08120d;color:#fff;font-size:14px;outline:none}.technician-form input:focus{border-color:#32dc79;box-shadow:0 0 0 3px #32dc7922}.enabled{grid-column:1/-1;display:flex;align-items:center;gap:9px;padding:4px 0}.enabled input{width:18px;height:18px;accent-color:#2ed875}.enabled span{margin:0!important}.form-actions{grid-column:1/-1;display:flex;gap:9px}.form-actions button,.form-actions a{display:grid;place-items:center;min-height:43px;border-radius:10px;font-weight:900;text-decoration:none}.save{flex:1;border:0;background:#2ed875;color:#06110b;cursor:pointer}.delete{width:76px;border:1px solid #713844;color:#ff9daa;background:#241317}.list{display:grid;gap:10px;margin-top:20px}.technician-card{border:1px solid #294537;border-radius:14px;background:#0a1710;overflow:hidden}.technician-card summary{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px;cursor:pointer;list-style:none}.technician-card summary::-webkit-details-marker{display:none}.technician-card summary span{min-width:0}.technician-card summary b,.technician-card summary small{display:block}.technician-card summary small{margin-top:4px;color:#829e8f}.technician-card summary i{padding:5px 8px;border-radius:999px;font-size:11px;font-style:normal;font-weight:900;white-space:nowrap}.technician-card summary i.on{border:1px solid #2ed875;color:#72efa1;background:#113720}.technician-card summary i.off{border:1px solid #5c7165;color:#9aafa3;background:#152019}.technician-card .technician-form{padding:14px;border-top:1px solid #294537}.empty{padding:20px;text-align:center;color:#829e8f;border:1px dashed #355343;border-radius:13px}@media(max-width:620px){body{padding:13px}.shell{margin:8px auto}.panel{padding:17px}.technician-form{grid-template-columns:1fr}.enabled,.form-actions{grid-column:1}.top{align-items:flex-start;flex-direction:column}}
+  </style></head><body><main class="shell"><header class="top"><div><a href="/control">← กลับหน้าควบคุม</a><h1>ช่างและพื้นที่รับผิดชอบ</h1></div></header><p class="intro">ระบบจะแท็กช่างอัตโนมัติเมื่อพบงาน Service ที่ตรงทั้งอำเภอและจังหวัด สามารถเพิ่มพื้นที่ซ้ำให้ช่างคนเดิมได้</p>${errorBlock}<section class="panel"><h2>เพิ่มรายการใหม่</h2>${technicianForm(undefined, draft)}</section><section class="list">${rows}</section></main></body></html>`;
+}
+
+function technicianDeletePage(mention: ServiceAreaMention): string {
+  return `<!doctype html><html lang="th"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ยืนยันลบข้อมูลช่าง</title><style>
+    :root{color-scheme:dark;font-family:Inter,"Noto Sans Thai",system-ui,sans-serif;background:#08110d;color:#eefbf4}*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px;background:#08110d}.confirm{width:min(100%,440px);padding:28px;border:1px solid #663b41;border-radius:20px;background:#211317;box-shadow:0 24px 80px #0008}h1{margin:0 0 10px;font-size:25px}p{margin:0 0 22px;color:#d5aab1;line-height:1.6}.actions{display:grid;grid-template-columns:1fr 1fr;gap:10px}.actions button,.actions a{display:grid;place-items:center;min-height:48px;border-radius:12px;font-weight:900;text-decoration:none}.actions button{border:0;background:#f06474;color:#2b090e;cursor:pointer}.actions a{border:1px solid #3a5b49;color:#c8ded2;background:#0b1710}
+  </style></head><body><main class="confirm"><h1>ยืนยันลบข้อมูลช่าง</h1><p>${escapeHtml(mention.technicianName)} · ${escapeHtml(mention.district)} / ${escapeHtml(mention.province)} จะไม่ถูกแท็กสำหรับพื้นที่นี้อีก</p><div class="actions"><a href="/control/technicians">ยกเลิก</a><form method="post" action="/control/technicians/delete"><input type="hidden" name="id" value="${mention.id}"><button type="submit">ยืนยันลบ</button></form></div></main></body></html>`;
+}
+
+function mentionInputFromForm(form: FormData): ServiceAreaMentionInput {
+  return {
+    technicianName: String(form.get("technicianName") ?? ""),
+    lineUserId: String(form.get("lineUserId") ?? ""),
+    province: String(form.get("province") ?? ""),
+    district: String(form.get("district") ?? ""),
+    enabled: form.get("enabled") === "true",
+  };
+}
+
+function friendlyMentionError(error: unknown): string {
+  const message = error instanceof Error ? error.message : "บันทึกข้อมูลไม่สำเร็จ";
+  return /unique|constraint/i.test(message)
+    ? "ช่างคนนี้มีพื้นที่จังหวัดและอำเภอนี้อยู่แล้ว"
+    : message;
 }
 
 function bangkokTime(value: Date): string {
@@ -379,7 +458,7 @@ function controlPage(enabled: boolean, providers: ProviderStatus): string {
     .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}.stat{padding:13px;border:1px solid #294537;border-radius:13px;background:#0a1710}.stat small{display:block;color:#718d7e;font-size:11px}.stat strong{display:block;margin-top:5px;font-size:22px}.stat.wide{grid-column:span 2}.stat em{display:block;margin-top:5px;color:#8ca799;font-size:11px;font-style:normal;line-height:1.4}
     .meter{height:7px;margin-top:11px;border-radius:99px;background:#203429;overflow:hidden}.meter span{display:block;height:100%;width:${Math.min((providers.ocrSpaceUsage / OCR_SPACE_DAILY_LIMIT) * 100, 100)}%;background:${ocrSpaceRemaining > 0 ? "#30dc78" : "#f06474"}}
     .notice{margin-top:16px;padding:14px 16px;border-radius:13px;background:#172019;color:#91aa9c;font-size:13px;line-height:1.6;border:1px solid #293a30}
-    .control-bar{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-bottom:15px;color:#8fa99a;font-size:11px}.control-bar .version{padding:5px 8px;border:1px solid #345342;border-radius:999px;background:#0b1811;color:#b8d2c3}.refresh{margin-left:auto;padding:7px 11px;border:1px solid #3a6a50;border-radius:9px;color:#7ef0aa;text-decoration:none;background:#10271a;font-weight:800}.service-health{margin:16px 0 0;padding:11px 13px;border-radius:12px;font-size:12px;line-height:1.5}.service-health.ok{border:1px solid #2f7350;background:#102b1c;color:#74eba2}.service-health.warning{border:1px solid #8a6230;background:#302413;color:#ffd58d}.service-health ul{margin:7px 0 0;padding-left:20px}
+    .control-bar{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-bottom:15px;color:#8fa99a;font-size:11px}.control-bar .version{padding:5px 8px;border:1px solid #345342;border-radius:999px;background:#0b1811;color:#b8d2c3}.nav-actions{display:flex;gap:7px;margin-left:auto}.refresh{padding:7px 11px;border:1px solid #3a6a50;border-radius:9px;color:#7ef0aa;text-decoration:none;background:#10271a;font-weight:800}.manage{border-color:#437055;color:#d9ffe7}.service-health{margin:16px 0 0;padding:11px 13px;border-radius:12px;font-size:12px;line-height:1.5}.service-health.ok{border:1px solid #2f7350;background:#102b1c;color:#74eba2}.service-health.warning{border:1px solid #8a6230;background:#302413;color:#ffd58d}.service-health ul{margin:7px 0 0;padding-left:20px}
     .logs{display:grid;gap:8px}.log-row,.log-empty{position:relative;overflow:hidden;padding:10px 12px;border:1px solid #294537;border-left:4px solid #536b5e;border-radius:11px;background:#0a1710}.log-row.pass{border-left-color:#36e77c;background:linear-gradient(90deg,#123522 0,#0a1710 28%)}.log-row.fail{border-left-color:#ff6478;background:linear-gradient(90deg,#35171d 0,#0a1710 28%)}.log-row.error{border-left-color:#ffad55;background:linear-gradient(90deg,#352515 0,#0a1710 28%)}.log-row.ignored{border-left-color:#71877b}.log-main{display:grid;grid-template-columns:88px 66px 72px minmax(165px,1fr) 96px 88px;gap:8px;align-items:center}.outcome-badge{display:inline-flex;align-items:center;gap:7px;font-size:14px;white-space:nowrap}.outcome-badge i,.evidence-chip i{display:grid;place-items:center;font-style:normal;font-weight:900}.outcome-badge i{width:22px;height:22px;border-radius:50%;background:#52695d;color:#fff}.pass .outcome-badge{color:#70f5a5}.pass .outcome-badge i{background:#2bc96c;color:#05200f}.fail .outcome-badge{color:#ff8c9a}.fail .outcome-badge i{background:#e05264}.error .outcome-badge{color:#ffc17e}.error .outcome-badge i{background:#ef9c45;color:#251406}.log-cell{font-size:12px;min-width:0}.log-cell small{display:block;color:#789486;font-size:9px;margin-bottom:1px}.job-value,.amount-value{display:block;overflow:hidden;text-overflow:ellipsis;font-size:13px;color:#f4fff8;letter-spacing:.02em;white-space:nowrap}.pass .amount-value{color:#70f5a5}.fail .amount-value{color:#ff9aa6}.evidence-row{display:flex;flex-wrap:wrap;gap:6px;margin:0;min-width:0}.evidence-chip{display:inline-flex;align-items:center;gap:4px;padding:4px 7px;border:1px solid #43574c;border-radius:999px;background:#142019;color:#9db1a6;font-size:10px;font-weight:800;white-space:nowrap}.evidence-chip i{width:14px;height:14px;border-radius:50%;font-size:9px}.evidence-chip.found{border-color:#2bc96c;background:#123a23;color:#79f5a8}.evidence-chip.found i{background:#2bc96c;color:#05200f}.evidence-chip.missing{border-color:#b84554;background:#38181e;color:#ff9aa7}.evidence-chip.missing i{background:#d84f61;color:#fff}.evidence-chip.unknown i{background:#52695d;color:#fff}.log-meta{display:grid;min-width:0;justify-items:end;color:#9ab2a5;font-size:9px;line-height:1.45;white-space:normal;text-align:right}.log-more{margin-top:5px;color:#789486;font-size:10px}.log-more summary{width:max-content;cursor:pointer;color:#8eaa9b}.log-more div{margin-top:5px;padding-top:5px;border-top:1px solid #294537;line-height:1.5;overflow-wrap:anywhere}.log-actions{display:flex;justify-content:space-between;align-items:center;margin:22px 0 10px}.log-actions .section-title{margin:0}.clear-logs button{border:1px solid #663b41;border-radius:9px;background:transparent;color:#ff9daa;padding:7px 10px;cursor:pointer}.log-empty{color:#789486;text-align:center}
     .delivery-chip{display:inline-flex;min-width:0;justify-content:center;overflow:hidden;text-overflow:ellipsis;padding:5px 7px;border:1px solid #42584c;border-radius:999px;font-size:9px;font-weight:900;white-space:nowrap}.delivery-chip.sent{border-color:#2bc96c;background:#123a23;color:#79f5a8}.delivery-chip.pending{border-color:#b88b39;background:#352a15;color:#ffd477}.delivery-chip.failed{border-color:#b84554;background:#38181e;color:#ff9aa7}.delivery-chip.none{color:#83988c;background:#142019}
     @media(max-width:900px){.log-main{grid-template-columns:84px 68px 76px minmax(180px,1fr) 92px;column-gap:8px;row-gap:4px}.log-meta{grid-column:1/-1;display:flex;justify-content:flex-end;gap:8px}}
@@ -387,7 +466,7 @@ function controlPage(enabled: boolean, providers: ProviderStatus): string {
   </style>
 </head>
 <body><main class="shell"><header class="top"><div class="brand"><div class="mark">K+</div><div><strong>KPLUS Control</strong><span>LINE receipt inspection</span></div></div><form class="logout" method="post" action="/control/logout"><button type="submit">ออกจากระบบ</button></form></header>
-  <section class="panel"><div class="control-bar"><span>อัปเดตล่าสุด ${escapeHtml(updatedAt)}</span><span class="version" title="${versionTitle}">เวอร์ชัน ${versionShort}</span><a class="refresh" href="/control">รีเฟรช</a></div><div class="eyebrow"><span class="dot"></span>สถานะระบบล่าสุด</div><h1>${statusText}</h1><p class="detail">${statusDetail}</p>
+  <section class="panel"><div class="control-bar"><span>อัปเดตล่าสุด ${escapeHtml(updatedAt)}</span><span class="version" title="${versionTitle}">เวอร์ชัน ${versionShort}</span><span class="nav-actions"><a class="refresh manage" href="/control/technicians">จัดการช่าง</a><a class="refresh" href="/control">รีเฟรช</a></span></div><div class="eyebrow"><span class="dot"></span>สถานะระบบล่าสุด</div><h1>${statusText}</h1><p class="detail">${statusDetail}</p>
   ${alerts}
   ${actionForm}
   <div class="pipeline"><div class="step"><small>ขั้นที่ 1</small><b>OCR.space</b><em>ตรวจ 500 รูปแรกของวัน</em></div><div class="step"><small>ขั้นที่ 2</small><b>Workers AI</b><em>ตรวจเมื่อ OCR.space ครบหรือข้อมูลไม่พอ</em></div><div class="step"><small>ขั้นที่ 3</small><b>Google Vision</b><em>ตรวจยืนยันเมื่อ Workers AI ยังตัดสินไม่ได้</em></div></div>
@@ -459,6 +538,60 @@ export async function handleControlRequest(
 
   const authenticated = await hasValidSession(request, env.CONTROL_PASSWORD);
   if (!authenticated) return htmlResponse(loginPage());
+
+  if (request.method === "GET" && url.pathname === "/control/technicians") {
+    const mentions = await listServiceAreaMentions(env.CONTROL_DB);
+    return htmlResponse(techniciansPage(mentions));
+  }
+
+  if (request.method === "POST" && url.pathname === "/control/technicians/save") {
+    if (!sameOrigin(request)) return htmlResponse("Forbidden", 403);
+    const form = await request.formData();
+    const input = mentionInputFromForm(form);
+    const rawId = String(form.get("id") ?? "").trim();
+    const id = rawId ? Number(rawId) : undefined;
+    try {
+      await saveServiceAreaMention(env.CONTROL_DB, input, id);
+      console.log(JSON.stringify({
+        event: id === undefined
+          ? "service_area_mention_created"
+          : "service_area_mention_updated",
+        id,
+        province: input.province,
+        district: input.district,
+        enabled: input.enabled,
+      }));
+      return redirectTo("/control/technicians");
+    } catch (error) {
+      const mentions = await listServiceAreaMentions(env.CONTROL_DB);
+      return htmlResponse(
+        techniciansPage(mentions, friendlyMentionError(error), input),
+        400,
+      );
+    }
+  }
+
+  if (request.method === "GET" && url.pathname === "/control/technicians/delete") {
+    const mention = await getServiceAreaMention(
+      env.CONTROL_DB,
+      Number(url.searchParams.get("id")),
+    );
+    if (!mention) return htmlResponse("ไม่พบรายการ", 404);
+    return htmlResponse(technicianDeletePage(mention));
+  }
+
+  if (request.method === "POST" && url.pathname === "/control/technicians/delete") {
+    if (!sameOrigin(request)) return htmlResponse("Forbidden", 403);
+    const form = await request.formData();
+    const id = Number(form.get("id"));
+    try {
+      await deleteServiceAreaMention(env.CONTROL_DB, id);
+    } catch (error) {
+      return htmlResponse(friendlyMentionError(error), 400);
+    }
+    console.log(JSON.stringify({ event: "service_area_mention_deleted", id }));
+    return redirectTo("/control/technicians");
+  }
 
   if (request.method === "GET" && url.pathname === "/control/confirm") {
     const target = url.searchParams.get("target");

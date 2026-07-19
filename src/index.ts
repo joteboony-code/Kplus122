@@ -57,6 +57,7 @@ import {
   saveSeenServiceJobs,
   selectNewServiceJobs,
 } from "./service-look";
+import { listServiceAreaMentions } from "./service-technicians";
 import {
   isRoundFinalizeJob,
   type ImageJob,
@@ -92,14 +93,25 @@ async function handleServiceLookCommand(
   let seen: Awaited<ReturnType<typeof loadSeenServiceJobKeys>> | null = null;
   let result: ReturnType<typeof formatServiceLookMessages>;
   try {
-    snapshot = await fetchCastleServiceSnapshot(env.CASTLE_SERVICE);
+    const [currentSnapshot, areaMentions] = await Promise.all([
+      fetchCastleServiceSnapshot(env.CASTLE_SERVICE),
+      listServiceAreaMentions(env.CONTROL_DB, true),
+    ]);
+    snapshot = currentSnapshot;
     if (context.serviceLookMode === "all") {
-      result = formatServiceLookMessages(snapshot, snapshot.jobs, "all");
+      result = formatServiceLookMessages(
+        snapshot,
+        snapshot.jobs,
+        "all",
+        areaMentions,
+      );
     } else {
       seen = await loadSeenServiceJobKeys(store, conversationId);
       result = formatServiceLookMessages(
         snapshot,
         selectNewServiceJobs(snapshot, seen),
+        "new",
+        areaMentions,
       );
     }
   } catch (error) {

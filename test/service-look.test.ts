@@ -8,6 +8,7 @@ import {
   type CastleServiceJob,
 } from "../src/service-look";
 import type { StateStore } from "../src/state-store";
+import type { ServiceAreaMention } from "../src/service-technicians";
 
 function job(index: number): CastleServiceJob {
   return {
@@ -28,6 +29,22 @@ function memoryStore(): StateStore {
     get: async (key) => values.get(key) ?? null,
     put: async (key, value) => { values.set(key, value); },
     delete: async (key) => { values.delete(key); },
+  };
+}
+
+function areaMention(
+  overrides: Partial<ServiceAreaMention> = {},
+): ServiceAreaMention {
+  return {
+    id: 1,
+    technicianName: "ช่างโจ",
+    lineUserId: "U285cef534729ee5bcfa1bf4d8e84e323",
+    province: "ชลบุรี",
+    district: "พานทอง",
+    enabled: true,
+    createdAt: 0,
+    updatedAt: 0,
+    ...overrides,
   };
 }
 
@@ -152,15 +169,17 @@ describe("Service-look", () => {
     const result = formatServiceLookMessages(
       { checkedAt: "", totalJobs: 2, jobs: [phanThongJob, job(2)] },
       [job(2), phanThongJob],
+      "new",
+      [areaMention()],
     );
 
     expect(result.displayedJobs[0]).toEqual(phanThongJob);
     expect(result.messages).toHaveLength(2);
     expect(result.messages[0]).toEqual({
       type: "textV2",
-      text: "{technician}\nมีงาน Service พื้นที่พานทอง / ชลบุรี 1 งาน",
+      text: "{technician0} มีงาน Service 1 งาน\nพื้นที่ พานทอง / ชลบุรี",
       substitution: {
-        technician: {
+        technician0: {
           type: "mention",
           mentionee: {
             type: "user",
@@ -190,10 +209,45 @@ describe("Service-look", () => {
     const result = formatServiceLookMessages(
       { checkedAt: "", totalJobs: jobs.length, jobs },
       jobs,
+      "new",
+      [areaMention()],
     );
     expect(result.messages).toHaveLength(5);
     expect(result.displayedJobs).toHaveLength(48);
     expect(result.messages[0]).toMatchObject({ type: "textV2" });
+  });
+
+  it("mentions each technician only for jobs in their own area", () => {
+    const jobs = [{
+      ...job(1),
+      district: "อ.พานทอง",
+      province: "จ.ชลบุรี",
+    }, {
+      ...job(2),
+      district: "ศรีราชา",
+      province: "ชลบุรี",
+    }];
+    const result = formatServiceLookMessages(
+      { checkedAt: "", totalJobs: jobs.length, jobs },
+      jobs,
+      "new",
+      [
+        areaMention(),
+        areaMention({
+          id: 2,
+          technicianName: "ช่างสอง",
+          lineUserId: "U11111111111111111111111111111111",
+          district: "ศรีราชา",
+        }),
+      ],
+    );
+    expect(result.messages[0]).toMatchObject({
+      type: "textV2",
+      substitution: {
+        technician0: { mentionee: { userId: areaMention().lineUserId } },
+        technician1: { mentionee: { userId: "U11111111111111111111111111111111" } },
+      },
+    });
   });
 
   it("reports when there are no active jobs in all mode", () => {

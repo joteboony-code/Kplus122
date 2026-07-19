@@ -1,9 +1,10 @@
 import type { StateStore } from "./state-store";
+import type { ServiceAreaMention } from "./service-technicians";
 
 const MAX_BUBBLES_PER_CAROUSEL = 12;
 const MAX_REPLY_MESSAGES = 5;
+const MAX_MENTIONS_PER_MESSAGE = 20;
 const SEEN_STATE_PREFIX = "service-look:seen:";
-const PHAN_THONG_TECHNICIAN_USER_ID = "U285cef534729ee5bcfa1bf4d8e84e323";
 
 export interface CastleServiceJob {
   jobNumber: string;
@@ -132,24 +133,76 @@ function isHttpsUrl(value: string): boolean {
   }
 }
 
-function isPhanThongChonburiJob(job: CastleServiceJob): boolean {
-  return job.district.includes("พานทอง") && job.province.includes("ชลบุรี");
+function normalizedArea(value: string): string {
+  return value.normalize("NFKC").toLocaleLowerCase("th-TH")
+    .replace(/จังหวัด|อำเภอ/g, "")
+    .replace(/(^|\s)(จ|อ)\.?\s*/g, "$1")
+    .replace(/[\s._\-/]/g, "");
 }
 
-function phanThongMentionMessage(jobCount: number): Record<string, unknown> {
+function areaMatches(left: string, right: string): boolean {
+  const normalizedLeft = normalizedArea(left);
+  const normalizedRight = normalizedArea(right);
+  return Boolean(
+    normalizedLeft &&
+    normalizedRight &&
+    (normalizedLeft.includes(normalizedRight) || normalizedRight.includes(normalizedLeft)),
+  );
+}
+
+export function serviceAreaMentionMatchesJob(
+  mention: ServiceAreaMention,
+  job: CastleServiceJob,
+): boolean {
+  return mention.enabled &&
+    areaMatches(mention.province, job.province) &&
+    areaMatches(mention.district, job.district);
+}
+
+function jobHasMention(
+  job: CastleServiceJob,
+  mentions: ServiceAreaMention[],
+): boolean {
+  return mentions.some((mention) => serviceAreaMentionMatchesJob(mention, job));
+}
+
+function technicianMentionMessage(
+  jobs: CastleServiceJob[],
+  mentions: ServiceAreaMention[],
+): Record<string, unknown> | null {
+  const assignments = new Map<
+    string,
+    { jobs: Set<string>; areas: Set<string> }
+  >();
+  for (const job of jobs) {
+    for (const mention of mentions) {
+      if (!serviceAreaMentionMatchesJob(mention, job)) continue;
+      const current = assignments.get(mention.lineUserId) ?? {
+        jobs: new Set<string>(),
+        areas: new Set<string>(),
+      };
+      current.jobs.add(serviceJobKey(job));
+      current.areas.add(`${mention.district} / ${mention.province}`);
+      assignments.set(mention.lineUserId, current);
+    }
+  }
+
+  const selected = [...assignments.entries()].slice(0, MAX_MENTIONS_PER_MESSAGE);
+  if (selected.length === 0) return null;
+  const substitution: Record<string, unknown> = {};
+  const lines = selected.map(([lineUserId, summary], index) => {
+    const key = `technician${index}`;
+    substitution[key] = {
+      type: "mention",
+      mentionee: { type: "user", userId: lineUserId },
+    };
+    const areas = [...summary.areas].slice(0, 3).join(", ");
+    return `{${key}} มีงาน Service ${summary.jobs.size} งาน\nพื้นที่ ${areas}`;
+  });
   return {
     type: "textV2",
-    text: "{technician}\nมีงาน Service พื้นที่พานทอง / ชลบุรี " +
-      `${jobCount} งาน`,
-    substitution: {
-      technician: {
-        type: "mention",
-        mentionee: {
-          type: "user",
-          userId: PHAN_THONG_TECHNICIAN_USER_ID,
-        },
-      },
-    },
+    text: lines.join("\n\n"),
+    substitution,
   };
 }
 
@@ -241,10 +294,11 @@ export function formatServiceLookMessages(
   snapshot: CastleServiceSnapshot,
   newJobs: CastleServiceJob[],
   mode: "new" | "all" = "new",
+  areaMentions: ServiceAreaMention[] = [],
 ): ServiceLookMessages {
-  const assignedJobs = newJobs.filter(isPhanThongChonburiJob);
+  const assignedJobs = newJobs.filter((job) => jobHasMention(job, areaMentions));
   const orderedJobs = assignedJobs.length > 0
-    ? [...assignedJobs, ...newJobs.filter((job) => !isPhanThongChonburiJob(job))]
+    ? [...assignedJobs, ...newJobs.filter((job) => !jobHasMention(job, areaMentions))]
     : newJobs;
   const flexMessageLimit = assignedJobs.length > 0
     ? MAX_REPLY_MESSAGES - 1
@@ -266,10 +320,8 @@ export function formatServiceLookMessages(
   }
 
   const messages: Record<string, unknown>[] = [];
-  const displayedAssignedJobs = displayedJobs.filter(isPhanThongChonburiJob);
-  if (displayedAssignedJobs.length > 0) {
-    messages.push(phanThongMentionMessage(displayedAssignedJobs.length));
-  }
+  const mentionMessage = technicianMentionMessage(displayedJobs, areaMentions);
+  if (mentionMessage) messages.push(mentionMessage);
   for (let index = 0; index < displayedJobs.length; index += MAX_BUBBLES_PER_CAROUSEL) {
     const page = displayedJobs.slice(index, index + MAX_BUBBLES_PER_CAROUSEL);
     messages.push({

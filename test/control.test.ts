@@ -160,6 +160,7 @@ describe("processing control", () => {
     expect(page).toContain("อัปเดตล่าสุด");
     expect(page).toContain("เวอร์ชัน 12345678");
     expect(page).toContain("บริการทั้งหมดทำงานปกติ");
+    expect(page).toContain("จัดการช่าง");
     expect(page).toContain("@media(max-width:900px)");
     expect(page).toContain("grid-column:1/-1;display:flex");
   });
@@ -291,5 +292,68 @@ describe("processing control", () => {
       env,
     );
     expect(login?.status).toBe(303);
+  });
+
+  it("lets an authenticated operator manage technician area assignments", async () => {
+    await workerEnv.CONTROL_DB.prepare(`CREATE TABLE IF NOT EXISTS service_area_mentions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      technician_name TEXT NOT NULL,
+      line_user_id TEXT NOT NULL,
+      province TEXT NOT NULL,
+      district TEXT NOT NULL,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+      updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+    )`).run();
+    await workerEnv.CONTROL_DB.prepare("DELETE FROM service_area_mentions").run();
+    const controlEnv = {
+      CONTROL_PASSWORD: "strong-test-password",
+      CONTROL_DB: workerEnv.CONTROL_DB,
+      OPERATIONAL_COUNTERS: workerEnv.OPERATIONAL_COUNTERS,
+    };
+    const login = await handleControlRequest(
+      new Request("https://example.com/control/login", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+          Origin: "https://example.com",
+        },
+        body: new URLSearchParams({ password: controlEnv.CONTROL_PASSWORD }),
+      }),
+      controlEnv,
+    );
+    const sessionCookie = login?.headers.get("Set-Cookie")?.split(";", 1)[0] ?? "";
+
+    const saved = await handleControlRequest(
+      new Request("https://example.com/control/technicians/save", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+          Cookie: sessionCookie,
+          Origin: "https://example.com",
+        },
+        body: new URLSearchParams({
+          technicianName: "ช่างโจ",
+          lineUserId: "U285cef534729ee5bcfa1bf4d8e84e323",
+          province: "ชลบุรี",
+          district: "พานทอง",
+          enabled: "true",
+        }),
+      }),
+      controlEnv,
+    );
+    expect(saved?.status).toBe(303);
+    expect(saved?.headers.get("Location")).toBe("/control/technicians");
+
+    const pageResponse = await handleControlRequest(
+      new Request("https://example.com/control/technicians", {
+        headers: { Cookie: sessionCookie },
+      }),
+      controlEnv,
+    );
+    const page = await pageResponse?.text();
+    expect(page).toContain("ช่างโจ");
+    expect(page).toContain("พานทอง / ชลบุรี");
+    expect(page).toContain("U285cef534729ee5bcfa1bf4d8e84e323");
   });
 });
