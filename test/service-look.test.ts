@@ -123,6 +123,26 @@ describe("Service-look", () => {
     });
   });
 
+  it("uses compact micro bubbles for Service jobs", () => {
+    const result = formatServiceLookMessages(
+      { checkedAt: "", totalJobs: 1, jobs: [job(1)] },
+      [job(1)],
+    );
+    const message = result.messages[0] as {
+      contents: { contents: Array<Record<string, unknown>> };
+    };
+    expect(message.contents.contents[0]).toMatchObject({
+      type: "bubble",
+      size: "micro",
+      body: { paddingAll: "12px" },
+      footer: {
+        paddingAll: "8px",
+        paddingTop: "0px",
+        contents: [{ type: "button", height: "sm" }],
+      },
+    });
+  });
+
   it("reports when there are no active jobs in all mode", () => {
     const result = formatServiceLookMessages(
       { checkedAt: "", totalJobs: 0, jobs: [] },

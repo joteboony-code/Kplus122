@@ -135,16 +135,17 @@ function fieldRow(label: string, value: string): Record<string, unknown> {
   return {
     type: "box",
     layout: "baseline",
-    spacing: "sm",
+    spacing: "xs",
     contents: [
-      { type: "text", text: label, color: "#8C8C8C", size: "sm", flex: 2 },
+      { type: "text", text: label, color: "#8C8C8C", size: "xxs", flex: 2 },
       {
         type: "text",
         text: value || "-",
         color: "#333333",
-        size: "sm",
+        size: "xxs",
         flex: 5,
         wrap: true,
+        maxLines: 2,
       },
     ],
   };
@@ -157,24 +158,26 @@ function jobBubble(job: CastleServiceJob): Record<string, unknown> {
       type: "text",
       text: `งาน ${job.jobNumber || job.terminalId || "ไม่ระบุ"}`,
       weight: "bold",
-      size: "lg",
+      size: "sm",
       color: "#0A7A45",
       wrap: true,
+      maxLines: 2,
     },
     {
       type: "text",
       text: job.merchantName || "ไม่ระบุร้าน",
-      size: "md",
+      size: "xs",
       weight: "bold",
-      margin: "md",
+      margin: "sm",
       wrap: true,
+      maxLines: 2,
     },
-    { type: "separator", margin: "lg" },
+    { type: "separator", margin: "md" },
     {
       type: "box",
       layout: "vertical",
-      margin: "lg",
-      spacing: "sm",
+      margin: "md",
+      spacing: "xs",
       contents: [
         fieldRow("Terminal", job.terminalId),
         fieldRow("พื้นที่", area),
@@ -186,16 +189,24 @@ function jobBubble(job: CastleServiceJob): Record<string, unknown> {
 
   const bubble: Record<string, unknown> = {
     type: "bubble",
-    size: "kilo",
-    body: { type: "box", layout: "vertical", contents: body },
+    size: "micro",
+    body: {
+      type: "box",
+      layout: "vertical",
+      paddingAll: "12px",
+      contents: body,
+    },
   };
   if (isHttpsUrl(job.link)) {
     bubble.footer = {
       type: "box",
       layout: "vertical",
+      paddingAll: "8px",
+      paddingTop: "0px",
       contents: [{
         type: "button",
         style: "primary",
+        height: "sm",
         color: "#08A65C",
         action: { type: "uri", label: "เปิดรายละเอียดงาน", uri: job.link },
       }],
