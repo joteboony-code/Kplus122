@@ -26,9 +26,7 @@ import { handleControlRequest, isProcessingEnabled } from "./control";
 import {
   purgeExpiredInspectionLogs,
   recordInspectionLog,
-  updateLineDeliveryStatus,
   type LineDeliveryMethod,
-  type LineDeliveryStatus,
   type InspectionTrace,
 } from "./audit-log";
 import { getJobReference, storeJobReference } from "./job-reference";
@@ -38,7 +36,6 @@ import {
   imageJobFromEvent,
   referenceCodeFromEvent,
   sendReplyMessages,
-  sendInspectionPushResult,
   sendInspectionResultWithMethod,
   serviceLookContextFromEvent,
   verifyLineSignature,
@@ -48,7 +45,6 @@ import { hasRecentPass, recordRecentPass } from "./reply-state";
 import { isImageProcessed, markImageProcessed } from "./processing-state";
 import {
   receiptRoundKey,
-  ROUND_INACTIVITY_SECONDS,
   type RoundEvidence,
 } from "./receipt-round";
 export { ReceiptRoundCoordinator } from "./receipt-round-coordinator";
@@ -228,25 +224,6 @@ async function recordAuditSafely(
   }
 }
 
-async function updateLineDeliverySafely(
-  env: Env,
-  job: ImageJob,
-  status: LineDeliveryStatus,
-  method: LineDeliveryMethod | null,
-): Promise<void> {
-  try {
-    await updateLineDeliveryStatus(env.CONTROL_DB, job.messageId, status, method);
-  } catch (error) {
-    console.error(JSON.stringify({
-      event: "line_delivery_log_update_failed",
-      messageId: job.messageId,
-      status,
-      method,
-      error: error instanceof Error ? error.message : "unknown error",
-    }));
-  }
-}
-
 function numericSetting(value: string, name: string): number {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) throw new Error(`Invalid ${name} setting`);
@@ -274,7 +251,6 @@ async function replyKplusSuccess(
       job,
       formatKplusSuccess(amount),
       env.LINE_CHANNEL_ACCESS_TOKEN,
-      String(env.ENABLE_PUSH_FALLBACK) === "true",
     );
     if (!method) throw new Error("LINE inspection result delivery failed");
     trace.lineDeliveryStatus = "sent";
@@ -317,6 +293,52 @@ async function replyKplusSuccess(
     amount,
   }));
   return { outcome: "pass" };
+}
+
+async function replyKplusFailure(
+  job: ImageJob,
+  text: string,
+  env: Env,
+  trace: InspectionTrace,
+): Promise<"sent" | "suppressed"> {
+  const roundKey = receiptRoundKey(job);
+  if (roundKey) {
+    const claim = await env.RECEIPT_ROUNDS.getByName(roundKey).claimFailure(job);
+    if (claim === "suppressed") return "suppressed";
+    if (claim === "busy") throw new Error("Failure delivery is already in progress");
+  }
+
+  trace.lineDeliveryStatus = "pending";
+  try {
+    const method = await sendInspectionResultWithMethod(
+      job,
+      text,
+      env.LINE_CHANNEL_ACCESS_TOKEN,
+    );
+    if (method !== "reply") throw new Error("LINE inspection reply failed");
+    trace.lineDeliveryStatus = "sent";
+    trace.lineDeliveryMethod = "reply";
+  } catch (error) {
+    trace.lineDeliveryStatus = "failed";
+    delete trace.lineDeliveryMethod;
+    if (roundKey) {
+      await env.RECEIPT_ROUNDS.getByName(roundKey).releaseFailure(job);
+    }
+    throw error;
+  }
+
+  if (roundKey) {
+    try {
+      await env.RECEIPT_ROUNDS.getByName(roundKey).completeAfterFailure(job);
+    } catch (error) {
+      console.error(JSON.stringify({
+        event: "failure_completion_record_failed",
+        messageId: job.messageId,
+        error: error instanceof Error ? error.message : "unknown error",
+      }));
+    }
+  }
+  return "sent";
 }
 
 async function handleWebhook(request: Request, env: Env): Promise<Response> {
@@ -765,51 +787,10 @@ async function processImageJob(
   };
 }
 
-async function processRoundFinalizer(
-  job: RoundFinalizeJob,
-  env: Env,
-): Promise<void> {
-  const result = await env.RECEIPT_ROUNDS.getByName(job.roundKey).finalize(job);
-  if (result.status === "waiting" || result.status === "busy") {
-    await env.IMAGE_QUEUE.send(job, {
-      delaySeconds: result.retryAfterSeconds ?? ROUND_INACTIVITY_SECONDS,
-    });
-    return;
-  }
-  if (result.status !== "finalized") return;
-
-  try {
-    if (result.evidence) {
-      const sent = await sendInspectionPushResult(
-        result.evidence.job,
-        result.evidence.text,
-        env.LINE_CHANNEL_ACCESS_TOKEN,
-      );
-      if (!sent) {
-        await updateLineDeliverySafely(
-          env,
-          result.evidence.job,
-          "failed",
-          "push",
-        );
-        throw new Error("LINE round summary delivery failed");
-      }
-      await updateLineDeliverySafely(
-        env,
-        result.evidence.job,
-        "sent",
-        "push",
-      );
-    }
-    await env.RECEIPT_ROUNDS.getByName(job.roundKey).completeFinalization(job);
-  } catch (error) {
-    await env.RECEIPT_ROUNDS.getByName(job.roundKey).releaseFinalization(job);
-    throw error;
-  }
+function discardLegacyRoundFinalizer(job: RoundFinalizeJob): void {
   console.log(JSON.stringify({
-    event: "receipt_round_finalized",
+    event: "legacy_receipt_round_finalizer_discarded",
     roundKey: job.roundKey,
-    result: result.evidence?.kind ?? "silent-no-kplus",
   }));
 }
 
@@ -830,18 +811,8 @@ export default {
   async queue(batch, env): Promise<void> {
     for (const message of batch.messages) {
       if (isRoundFinalizeJob(message.body)) {
-        try {
-          await processRoundFinalizer(message.body, env);
-          message.ack();
-        } catch (error) {
-          console.error(JSON.stringify({
-            event: "receipt_round_finalizer_failed",
-            roundKey: message.body.roundKey,
-            attempts: message.attempts,
-            error: error instanceof Error ? error.message : "unknown error",
-          }));
-          message.retry({ delaySeconds: 30 });
-        }
+        discardLegacyRoundFinalizer(message.body);
+        message.ack();
         continue;
       }
 
@@ -885,34 +856,18 @@ export default {
           continue;
         }
 
-        const result = await processImageJob(job, env, trace);
-        const roundKey = receiptRoundKey(job);
-        if (result.outcome !== "pass") {
-          const finalizer = roundKey
-            ? await env.RECEIPT_ROUNDS.getByName(roundKey).recordActivity(
-                job,
-                result.evidence ? { ...result.evidence, job } : undefined,
-                crypto.randomUUID(),
-              )
-            : null;
-          if (finalizer) {
-            await env.IMAGE_QUEUE.send(finalizer, {
-              delaySeconds: ROUND_INACTIVITY_SECONDS,
-            });
-          } else if (!roundKey && result.evidence) {
-            trace.lineDeliveryStatus = "pending";
-            const method = await sendInspectionResultWithMethod(
-              job,
-              result.evidence.text,
-              env.LINE_CHANNEL_ACCESS_TOKEN,
-              String(env.ENABLE_PUSH_FALLBACK) === "true",
-            );
-            if (!method) {
-              trace.lineDeliveryStatus = "failed";
-              throw new Error("LINE inspection result delivery failed");
-            }
-            trace.lineDeliveryStatus = "sent";
-            trace.lineDeliveryMethod = method;
+        let result = await processImageJob(job, env, trace);
+        if (result.outcome !== "pass" && result.evidence) {
+          const delivery = await replyKplusFailure(
+            job,
+            result.evidence.text,
+            env,
+            trace,
+          );
+          if (delivery === "suppressed") {
+            trace.stage = "round-failure-suppression";
+            trace.lineDeliveryStatus = "not_applicable";
+            result = IGNORED_RESULT;
           }
         }
         trace.lineDeliveryStatus ??=

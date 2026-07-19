@@ -298,13 +298,11 @@ export async function sendInspectionResult(
   job: ImageJob,
   text: string,
   channelAccessToken: string,
-  enablePushFallback: boolean,
 ): Promise<boolean> {
   return (await sendInspectionResultWithMethod(
     job,
     text,
     channelAccessToken,
-    enablePushFallback,
   )) !== null;
 }
 
@@ -312,8 +310,7 @@ export async function sendInspectionResultWithMethod(
   job: ImageJob,
   text: string,
   channelAccessToken: string,
-  enablePushFallback: boolean,
-): Promise<"reply" | "push" | null> {
+): Promise<"reply" | null> {
   const message = inspectionMessage(job, text);
 
   const replied = await postLineMessage(
@@ -326,24 +323,5 @@ export async function sendInspectionResultWithMethod(
   );
 
   if (replied) return "reply";
-  if (enablePushFallback && job.replyTarget) {
-    const pushed = await postLineMessage("/v2/bot/message/push", channelAccessToken, {
-      to: job.replyTarget,
-      messages: [message],
-    });
-    return pushed ? "push" : null;
-  }
   return null;
-}
-
-export async function sendInspectionPushResult(
-  job: ImageJob,
-  text: string,
-  channelAccessToken: string,
-): Promise<boolean> {
-  if (!job.replyTarget) return false;
-  return postLineMessage("/v2/bot/message/push", channelAccessToken, {
-    to: job.replyTarget,
-    messages: [inspectionMessage(job, text)],
-  });
 }

@@ -71,7 +71,6 @@
     "EXPECTED_SALE_AMOUNT": "1.22",
     "EXPECTED_VOID_AMOUNT": "-1.22",
     "MIN_CONFIDENCE": "0.65",
-    "ENABLE_PUSH_FALLBACK": "false",
     "PROCESSING_FORCE_DISABLED": "false"
   },
   "observability": {

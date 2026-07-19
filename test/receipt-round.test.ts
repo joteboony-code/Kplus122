@@ -1,13 +1,16 @@
 import { describe, expect, it } from "vitest";
 import { env } from "cloudflare:test";
 import {
+  claimRoundFailure,
   claimRoundPass,
+  completeRoundAfterFailure,
   completeRoundFinalization,
   completeRoundAfterPass,
   finalizeRound,
   receiptRoundKey,
   recordRoundActivity,
   releaseRoundFinalization,
+  releaseRoundFailure,
   releaseRoundPass,
   ROUND_INACTIVITY_SECONDS,
 } from "../src/receipt-round";
@@ -169,6 +172,59 @@ describe("receipt round state", () => {
       coordinator.claimPass(second),
     ]);
     expect(results.sort()).toEqual(["acquired", "suppressed"]);
+  });
+
+  it("allows only one immediate failure reply per sender and job", async () => {
+    const state = memoryState();
+    const first = { ...job("fail-one"), referenceCode: "12345678" };
+    const second = { ...job("fail-two"), referenceCode: "12345678" };
+
+    expect(await claimRoundFailure(first, state, 10_000)).toBe("acquired");
+    expect(await claimRoundFailure(second, state, 10_001)).toBe("suppressed");
+    await completeRoundAfterFailure(first, state, 10_002);
+    expect(await claimRoundFailure(second, state, 10_003)).toBe("suppressed");
+  });
+
+  it("keeps interleaved technicians and job references independent", async () => {
+    const state = memoryState();
+    const technicianOne = { ...job("u1", "U1"), referenceCode: "12345678" };
+    const technicianTwo = { ...job("u2", "U2"), referenceCode: "87654321" };
+
+    expect(await Promise.all([
+      claimRoundFailure(technicianOne, state, 10_000),
+      claimRoundFailure(technicianTwo, state, 10_000),
+    ])).toEqual(["acquired", "acquired"]);
+    expect(receiptRoundKey(technicianOne)).not.toBe(receiptRoundKey(technicianTwo));
+  });
+
+  it("allows a corrected pass after an immediate failure reply", async () => {
+    const state = memoryState();
+    const failed = { ...job("wrong"), referenceCode: "12345678" };
+    const corrected = { ...job("correct"), referenceCode: "12345678" };
+
+    expect(await claimRoundFailure(failed, state, 10_000)).toBe("acquired");
+    await completeRoundAfterFailure(failed, state, 10_001);
+    expect(await claimRoundPass(corrected, state, 10_002)).toBe("acquired");
+  });
+
+  it("does not send pass and fail replies concurrently for one round", async () => {
+    const state = memoryState();
+    const failing = job("wrong");
+    const passing = job("correct");
+
+    expect(await claimRoundFailure(failing, state, 10_000)).toBe("acquired");
+    expect(await claimRoundPass(passing, state, 10_001)).toBe("suppressed");
+    await releaseRoundFailure(failing, state);
+    expect(await claimRoundPass(passing, state, 10_002)).toBe("acquired");
+    expect(await claimRoundFailure(failing, state, 10_003)).toBe("suppressed");
+  });
+
+  it("releases a failed immediate failure delivery so it can retry", async () => {
+    const state = memoryState();
+    const failed = job("wrong");
+    expect(await claimRoundFailure(failed, state, 10_000)).toBe("acquired");
+    await releaseRoundFailure(failed, state);
+    expect(await claimRoundFailure(failed, state, 10_001)).toBe("acquired");
   });
 
   it("releases a failed pass delivery so the same image can retry", async () => {

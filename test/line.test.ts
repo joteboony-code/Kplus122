@@ -4,7 +4,6 @@ import {
   imageJobFromEvent,
   referenceCodeFromEvent,
   sendReplyMessages,
-  sendInspectionPushResult,
   sendInspectionResult,
   sendInspectionResultWithMethod,
   serviceLookContextFromEvent,
@@ -154,7 +153,7 @@ describe("LINE webhook", () => {
       replyTarget: "group-1",
       sourceType: "group",
       senderUserId: "U123",
-    }, "ผลตรวจ", "channel-token", false);
+    }, "ผลตรวจ", "channel-token");
 
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     const payload = JSON.parse(String(init.body)) as {
@@ -186,7 +185,7 @@ describe("LINE webhook", () => {
       replyTarget: "U123",
       sourceType: "user",
       senderUserId: "U123",
-    }, "ผลตรวจ", "channel-token", false);
+    }, "ผลตรวจ", "channel-token");
 
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     const payload = JSON.parse(String(init.body)) as {
@@ -250,31 +249,14 @@ describe("LINE webhook", () => {
       replyTarget: "group-1",
       sourceType: "group",
       senderUserId: "U123",
-    }, "✅ ตรวจสอบผ่าน: พบสลิป KPLUS ยอด 1.22 บาท ข้อมูลถูกต้อง", "channel-token", true);
+    }, "✅ ตรวจสอบผ่าน: พบสลิป KPLUS ยอด 1.22 บาท ข้อมูลถูกต้อง", "channel-token");
 
     expect(handled).toBe(true);
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(fetchMock.mock.calls[0]?.[0]).toBe("https://api.line.me/v2/bot/message/reply");
   });
 
-  it("uses push for an end-of-round summary", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
-    vi.stubGlobal("fetch", fetchMock);
-
-    const sent = await sendInspectionPushResult({
-      webhookEventId: "event-3",
-      messageId: "image-3",
-      replyToken: "expired-reply-token",
-      replyTarget: "group-1",
-      sourceType: "group",
-      senderUserId: "U123",
-    }, "round summary", "channel-token");
-
-    expect(sent).toBe(true);
-    expect(fetchMock.mock.calls[0]?.[0]).toBe("https://api.line.me/v2/bot/message/push");
-  });
-
-  it("reports delivery failure when reply and fallback are unavailable", async () => {
+  it("reports delivery failure without trying Push when Reply fails", async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 400 }));
     vi.stubGlobal("fetch", fetchMock);
 
@@ -285,32 +267,14 @@ describe("LINE webhook", () => {
       replyTarget: "group-1",
       sourceType: "group",
       senderUserId: "U123",
-    }, "result", "channel-token", false);
+    }, "result", "channel-token");
 
     expect(sent).toBe(false);
     expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("https://api.line.me/v2/bot/message/reply");
   });
 
-  it("reports success only when push fallback succeeds", async () => {
-    const fetchMock = vi.fn()
-      .mockResolvedValueOnce(new Response(null, { status: 400 }))
-      .mockResolvedValueOnce(new Response(null, { status: 200 }));
-    vi.stubGlobal("fetch", fetchMock);
-
-    const sent = await sendInspectionResult({
-      webhookEventId: "event-fallback",
-      messageId: "image-fallback",
-      replyToken: "expired-token",
-      replyTarget: "group-1",
-      sourceType: "group",
-      senderUserId: "U123",
-    }, "result", "channel-token", true);
-
-    expect(sent).toBe(true);
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-  });
-
-  it("reports whether LINE used Reply or Push", async () => {
+  it("reports whether LINE used Reply", async () => {
     const replyFetch = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
     vi.stubGlobal("fetch", replyFetch);
     const job = {
@@ -326,18 +290,19 @@ describe("LINE webhook", () => {
       job,
       "result",
       "channel-token",
-      true,
     )).toBe("reply");
 
-    const pushFetch = vi.fn()
-      .mockResolvedValueOnce(new Response(null, { status: 400 }))
-      .mockResolvedValueOnce(new Response(null, { status: 200 }));
-    vi.stubGlobal("fetch", pushFetch);
+    const failedReplyFetch = vi.fn()
+      .mockResolvedValueOnce(new Response(null, { status: 400 }));
+    vi.stubGlobal("fetch", failedReplyFetch);
     expect(await sendInspectionResultWithMethod(
       job,
       "result",
       "channel-token",
-      true,
-    )).toBe("push");
+    )).toBeNull();
+    expect(failedReplyFetch).toHaveBeenCalledTimes(1);
+    expect(failedReplyFetch.mock.calls[0]?.[0]).toBe(
+      "https://api.line.me/v2/bot/message/reply",
+    );
   });
 });
