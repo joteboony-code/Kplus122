@@ -3,6 +3,7 @@ import type { StateStore } from "./state-store";
 const MAX_BUBBLES_PER_CAROUSEL = 12;
 const MAX_REPLY_MESSAGES = 5;
 const SEEN_STATE_PREFIX = "service-look:seen:";
+const PHAN_THONG_TECHNICIAN_USER_ID = "U285cef534729ee5bcfa1bf4d8e84e323";
 
 export interface CastleServiceJob {
   jobNumber: string;
@@ -131,6 +132,27 @@ function isHttpsUrl(value: string): boolean {
   }
 }
 
+function isPhanThongChonburiJob(job: CastleServiceJob): boolean {
+  return job.district.includes("พานทอง") && job.province.includes("ชลบุรี");
+}
+
+function phanThongMentionMessage(jobCount: number): Record<string, unknown> {
+  return {
+    type: "textV2",
+    text: "{technician}\nมีงาน Service พื้นที่พานทอง / ชลบุรี " +
+      `${jobCount} งาน`,
+    substitution: {
+      technician: {
+        type: "mention",
+        mentionee: {
+          type: "user",
+          userId: PHAN_THONG_TECHNICIAN_USER_ID,
+        },
+      },
+    },
+  };
+}
+
 function fieldRow(label: string, value: string): Record<string, unknown> {
   return {
     type: "box",
@@ -220,9 +242,16 @@ export function formatServiceLookMessages(
   newJobs: CastleServiceJob[],
   mode: "new" | "all" = "new",
 ): ServiceLookMessages {
-  const displayedJobs = newJobs.slice(
+  const assignedJobs = newJobs.filter(isPhanThongChonburiJob);
+  const orderedJobs = assignedJobs.length > 0
+    ? [...assignedJobs, ...newJobs.filter((job) => !isPhanThongChonburiJob(job))]
+    : newJobs;
+  const flexMessageLimit = assignedJobs.length > 0
+    ? MAX_REPLY_MESSAGES - 1
+    : MAX_REPLY_MESSAGES;
+  const displayedJobs = orderedJobs.slice(
     0,
-    MAX_BUBBLES_PER_CAROUSEL * MAX_REPLY_MESSAGES,
+    MAX_BUBBLES_PER_CAROUSEL * flexMessageLimit,
   );
   if (displayedJobs.length === 0) {
     return {
@@ -237,6 +266,10 @@ export function formatServiceLookMessages(
   }
 
   const messages: Record<string, unknown>[] = [];
+  const displayedAssignedJobs = displayedJobs.filter(isPhanThongChonburiJob);
+  if (displayedAssignedJobs.length > 0) {
+    messages.push(phanThongMentionMessage(displayedAssignedJobs.length));
+  }
   for (let index = 0; index < displayedJobs.length; index += MAX_BUBBLES_PER_CAROUSEL) {
     const page = displayedJobs.slice(index, index + MAX_BUBBLES_PER_CAROUSEL);
     messages.push({

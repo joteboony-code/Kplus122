@@ -143,6 +143,59 @@ describe("Service-look", () => {
     });
   });
 
+  it("mentions the assigned technician once for Phan Thong, Chonburi jobs", () => {
+    const phanThongJob = {
+      ...job(1),
+      district: "อ.พานทอง",
+      province: "จ.ชลบุรี",
+    };
+    const result = formatServiceLookMessages(
+      { checkedAt: "", totalJobs: 2, jobs: [phanThongJob, job(2)] },
+      [job(2), phanThongJob],
+    );
+
+    expect(result.displayedJobs[0]).toEqual(phanThongJob);
+    expect(result.messages).toHaveLength(2);
+    expect(result.messages[0]).toEqual({
+      type: "textV2",
+      text: "{technician}\nมีงาน Service พื้นที่พานทอง / ชลบุรี 1 งาน",
+      substitution: {
+        technician: {
+          type: "mention",
+          mentionee: {
+            type: "user",
+            userId: "U285cef534729ee5bcfa1bf4d8e84e323",
+          },
+        },
+      },
+    });
+    expect(result.messages[1]).toMatchObject({ type: "flex" });
+  });
+
+  it("does not mention the technician for jobs outside Phan Thong, Chonburi", () => {
+    const result = formatServiceLookMessages(
+      { checkedAt: "", totalJobs: 1, jobs: [job(1)] },
+      [job(1)],
+    );
+    expect(result.messages).toHaveLength(1);
+    expect(result.messages[0]).toMatchObject({ type: "flex" });
+  });
+
+  it("keeps the mention and Flex carousels within the five-message Reply limit", () => {
+    const jobs = Array.from({ length: 60 }, (_, index) => ({
+      ...job(index + 1),
+      district: "พานทอง",
+      province: "ชลบุรี",
+    }));
+    const result = formatServiceLookMessages(
+      { checkedAt: "", totalJobs: jobs.length, jobs },
+      jobs,
+    );
+    expect(result.messages).toHaveLength(5);
+    expect(result.displayedJobs).toHaveLength(48);
+    expect(result.messages[0]).toMatchObject({ type: "textV2" });
+  });
+
   it("reports when there are no active jobs in all mode", () => {
     const result = formatServiceLookMessages(
       { checkedAt: "", totalJobs: 0, jobs: [] },
