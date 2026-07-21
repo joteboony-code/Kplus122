@@ -272,7 +272,17 @@ function inspectionMessage(job: ImageJob, text: string): object {
         },
       }
     : { type: "text", text, ...quote };
-  return withServiceLookQuickReply(message);
+  return message;
+}
+
+function withQuickReplyOnLast(
+  messages: Record<string, unknown>[],
+): Record<string, unknown>[] {
+  return messages.map((message, index) =>
+    index === messages.length - 1
+      ? withServiceLookQuickReply(message)
+      : message
+  );
 }
 
 export async function sendReplyMessages(
@@ -283,11 +293,7 @@ export async function sendReplyMessages(
   if (messages.length < 1 || messages.length > 5) {
     throw new Error("LINE reply requires 1-5 messages");
   }
-  const withQuickReply = messages.map((message, index) =>
-    index === messages.length - 1
-      ? withServiceLookQuickReply(message)
-      : message
-  );
+  const withQuickReply = withQuickReplyOnLast(messages);
   return postLineMessage("/v2/bot/message/reply", channelAccessToken, {
     replyToken: context.replyToken,
     messages: withQuickReply,
@@ -310,15 +316,22 @@ export async function sendInspectionResultWithMethod(
   job: ImageJob,
   text: string,
   channelAccessToken: string,
+  additionalMessages: Record<string, unknown>[] = [],
 ): Promise<"reply" | null> {
-  const message = inspectionMessage(job, text);
+  const messages = [
+    inspectionMessage(job, text) as Record<string, unknown>,
+    ...additionalMessages,
+  ];
+  if (messages.length > 5) {
+    throw new Error("LINE reply requires no more than 5 messages");
+  }
 
   const replied = await postLineMessage(
     "/v2/bot/message/reply",
     channelAccessToken,
     {
       replyToken: job.replyToken,
-      messages: [message],
+      messages: withQuickReplyOnLast(messages),
     },
   );
 

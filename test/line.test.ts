@@ -305,4 +305,41 @@ describe("LINE webhook", () => {
       "https://api.line.me/v2/bot/message/reply",
     );
   });
+
+  it("sends the inspection result and Service alert in one Reply request", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const job = {
+      webhookEventId: "event-service-alert",
+      messageId: "image-service-alert",
+      replyToken: "reply-token",
+      replyTarget: "group-1",
+      sourceType: "group" as const,
+      senderUserId: "U123",
+    };
+
+    expect(await sendInspectionResultWithMethod(
+      job,
+      "ผลตรวจ",
+      "channel-token",
+      [
+        { type: "textV2", text: "{technician0} มีงานใหม่", substitution: {} },
+        { type: "flex", altText: "งานใหม่", contents: { type: "bubble" } },
+      ],
+    )).toBe("reply");
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const payload = JSON.parse(String(init.body)) as {
+      messages: Array<Record<string, unknown>>;
+    };
+    expect(payload.messages).toHaveLength(3);
+    expect(payload.messages[0]).toMatchObject({
+      type: "textV2",
+      text: "{sender}\nผลตรวจ",
+    });
+    expect(payload.messages[0]).not.toHaveProperty("quickReply");
+    expect(payload.messages[1]).not.toHaveProperty("quickReply");
+    expect(payload.messages[2]).toHaveProperty("quickReply");
+  });
 });

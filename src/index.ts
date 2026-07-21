@@ -53,9 +53,13 @@ import { d1StateStore, purgeExpiredState } from "./state-store";
 import {
   fetchCastleServiceSnapshot,
   formatServiceLookMessages,
+  loadTechnicianNotifiedServiceJobKeys,
   loadSeenServiceJobKeys,
+  saveTechnicianNotifiedServiceJobs,
   saveSeenServiceJobs,
   selectNewServiceJobs,
+  selectUnnotifiedServiceJobsForTechnician,
+  type CastleServiceJob,
 } from "./service-look";
 import { listServiceAreaMentions } from "./service-technicians";
 import {
@@ -73,6 +77,89 @@ interface ProcessResult {
 }
 
 const IGNORED_RESULT: ProcessResult = { outcome: "ignored" };
+
+interface PreparedTechnicianServiceAlert {
+  lineUserId: string;
+  previousNotified: Set<string>;
+  displayedJobs: CastleServiceJob[];
+  messages: Record<string, unknown>[];
+}
+
+async function prepareTechnicianServiceAlert(
+  job: ImageJob,
+  env: Env,
+): Promise<PreparedTechnicianServiceAlert | null> {
+  const lineUserId = job.senderUserId;
+  if (!lineUserId) return null;
+  try {
+    const areaMentions = (await listServiceAreaMentions(env.CONTROL_DB, true))
+      .filter((mention) => mention.lineUserId === lineUserId);
+    if (areaMentions.length === 0) return null;
+
+    const store = d1StateStore(env.CONTROL_DB);
+    const [snapshot, previousNotified] = await Promise.all([
+      fetchCastleServiceSnapshot(env.CASTLE_SERVICE),
+      loadTechnicianNotifiedServiceJobKeys(store, lineUserId),
+    ]);
+    const newJobs = selectUnnotifiedServiceJobsForTechnician(
+      snapshot,
+      areaMentions,
+      lineUserId,
+      previousNotified,
+    );
+    if (newJobs.length === 0) return null;
+
+    const result = formatServiceLookMessages(
+      snapshot,
+      newJobs,
+      "new",
+      areaMentions,
+      4,
+    );
+    return {
+      lineUserId,
+      previousNotified,
+      displayedJobs: result.displayedJobs,
+      messages: result.messages,
+    };
+  } catch (error) {
+    console.warn(JSON.stringify({
+      event: "technician_service_alert_prepare_failed",
+      webhookEventId: job.webhookEventId,
+      error: error instanceof Error ? error.message : "unknown error",
+    }));
+    return null;
+  }
+}
+
+async function recordTechnicianServiceAlert(
+  alert: PreparedTechnicianServiceAlert | null,
+  env: Env,
+  webhookEventId: string,
+): Promise<void> {
+  if (!alert) return;
+  try {
+    await saveTechnicianNotifiedServiceJobs(
+      d1StateStore(env.CONTROL_DB),
+      alert.lineUserId,
+      alert.previousNotified,
+      alert.displayedJobs,
+    );
+    console.log(JSON.stringify({
+      event: "technician_service_alert_replied",
+      webhookEventId,
+      lineUserId: alert.lineUserId,
+      jobs: alert.displayedJobs.length,
+    }));
+  } catch (error) {
+    console.warn(JSON.stringify({
+      event: "technician_service_alert_state_save_failed",
+      webhookEventId,
+      lineUserId: alert.lineUserId,
+      error: error instanceof Error ? error.message : "unknown error",
+    }));
+  }
+}
 
 async function handleServiceLookCommand(
   context: ServiceLookContext,
@@ -93,17 +180,12 @@ async function handleServiceLookCommand(
   let seen: Awaited<ReturnType<typeof loadSeenServiceJobKeys>> | null = null;
   let result: ReturnType<typeof formatServiceLookMessages>;
   try {
-    const [currentSnapshot, areaMentions] = await Promise.all([
-      fetchCastleServiceSnapshot(env.CASTLE_SERVICE),
-      listServiceAreaMentions(env.CONTROL_DB, true),
-    ]);
-    snapshot = currentSnapshot;
+    snapshot = await fetchCastleServiceSnapshot(env.CASTLE_SERVICE);
     if (context.serviceLookMode === "all") {
       result = formatServiceLookMessages(
         snapshot,
         snapshot.jobs,
         "all",
-        areaMentions,
       );
     } else {
       seen = await loadSeenServiceJobKeys(store, conversationId);
@@ -111,7 +193,6 @@ async function handleServiceLookCommand(
         snapshot,
         selectNewServiceJobs(snapshot, seen),
         "new",
-        areaMentions,
       );
     }
   } catch (error) {
@@ -258,11 +339,13 @@ async function replyKplusSuccess(
 
   trace.lineDeliveryStatus = "pending";
   let method: LineDeliveryMethod | null = null;
+  const serviceAlert = await prepareTechnicianServiceAlert(job, env);
   try {
     method = await sendInspectionResultWithMethod(
       job,
       formatKplusSuccess(amount),
       env.LINE_CHANNEL_ACCESS_TOKEN,
+      serviceAlert?.messages ?? [],
     );
     if (!method) throw new Error("LINE inspection result delivery failed");
     trace.lineDeliveryStatus = "sent";
@@ -275,6 +358,7 @@ async function replyKplusSuccess(
     }
     throw error;
   }
+  await recordTechnicianServiceAlert(serviceAlert, env, job.webhookEventId);
   if (roundKey) {
     try {
       await env.RECEIPT_ROUNDS.getByName(roundKey).completeAfterPass(job);
@@ -321,11 +405,13 @@ async function replyKplusFailure(
   }
 
   trace.lineDeliveryStatus = "pending";
+  const serviceAlert = await prepareTechnicianServiceAlert(job, env);
   try {
     const method = await sendInspectionResultWithMethod(
       job,
       text,
       env.LINE_CHANNEL_ACCESS_TOKEN,
+      serviceAlert?.messages ?? [],
     );
     if (method !== "reply") throw new Error("LINE inspection reply failed");
     trace.lineDeliveryStatus = "sent";
@@ -338,6 +424,8 @@ async function replyKplusFailure(
     }
     throw error;
   }
+
+  await recordTechnicianServiceAlert(serviceAlert, env, job.webhookEventId);
 
   if (roundKey) {
     try {

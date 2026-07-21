@@ -230,7 +230,7 @@ function technicianForm(
     <label><span>ชื่อช่าง</span><input name="technicianName" value="${escapeHtml(value.technicianName)}" maxlength="100" required placeholder="เช่น ช่างโจ"></label>
     <label><span>LINE User ID</span><input name="lineUserId" value="${escapeHtml(value.lineUserId)}" maxlength="64" required placeholder="Uxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"></label>
     <label><span>จังหวัด</span><input name="province" value="${escapeHtml(value.province)}" maxlength="80" required placeholder="ชลบุรี"></label>
-    <label><span>อำเภอ</span><input name="district" value="${escapeHtml(value.district)}" maxlength="80" required placeholder="พานทอง"></label>
+    <label><span>อำเภอ</span><input name="district" value="${escapeHtml(value.district)}" maxlength="80" required placeholder="พานทอง หรือ ทุกอำเภอ"></label>
     <label class="enabled"><input type="checkbox" name="enabled" value="true"${value.enabled ? " checked" : ""}><span>เปิดใช้งานการแท็ก</span></label>
     <div class="form-actions"><button class="save" type="submit">${mention ? "บันทึกการแก้ไข" : "เพิ่มช่างและพื้นที่"}</button>${mention ? `<a class="delete" href="/control/technicians/delete?id=${mention.id}">ลบ</a>` : ""}</div>
   </form>`;

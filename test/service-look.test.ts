@@ -2,9 +2,13 @@ import { describe, expect, it, vi } from "vitest";
 import {
   fetchCastleServiceSnapshot,
   formatServiceLookMessages,
+  loadTechnicianNotifiedServiceJobKeys,
   loadSeenServiceJobKeys,
+  saveTechnicianNotifiedServiceJobs,
   saveSeenServiceJobs,
   selectNewServiceJobs,
+  selectUnnotifiedServiceJobsForTechnician,
+  serviceAreaMentionMatchesJob,
   type CastleServiceJob,
 } from "../src/service-look";
 import type { StateStore } from "../src/state-store";
@@ -83,6 +87,63 @@ describe("Service-look", () => {
       snapshot,
       await loadSeenServiceJobKeys(store, "group-b"),
     )).toHaveLength(2);
+  });
+
+  it("tracks Service alerts separately for each technician", async () => {
+    const store = memoryStore();
+    const first = job(1);
+    await saveTechnicianNotifiedServiceJobs(
+      store,
+      areaMention().lineUserId,
+      new Set(),
+      [first],
+    );
+
+    expect(await loadTechnicianNotifiedServiceJobKeys(
+      store,
+      areaMention().lineUserId,
+    )).toEqual(new Set(["SERV-1"]));
+    expect(await loadTechnicianNotifiedServiceJobKeys(
+      store,
+      "U11111111111111111111111111111111",
+    )).toEqual(new Set());
+  });
+
+  it("selects only unnotified jobs in the image sender's assigned area", () => {
+    const phanThongJob = {
+      ...job(1),
+      district: "พานทอง",
+    };
+    const sriRachaJob = {
+      ...job(2),
+      district: "ศรีราชา",
+    };
+    const snapshot = {
+      checkedAt: "",
+      totalJobs: 2,
+      jobs: [phanThongJob, sriRachaJob],
+    };
+    const mentions = [
+      areaMention(),
+      areaMention({
+        id: 2,
+        lineUserId: "U11111111111111111111111111111111",
+        district: "ศรีราชา",
+      }),
+    ];
+
+    expect(selectUnnotifiedServiceJobsForTechnician(
+      snapshot,
+      mentions,
+      areaMention().lineUserId,
+      new Set(),
+    )).toEqual([phanThongJob]);
+    expect(selectUnnotifiedServiceJobsForTechnician(
+      snapshot,
+      mentions,
+      areaMention().lineUserId,
+      new Set(["SERV-1"]),
+    )).toEqual([]);
   });
 
   it("allows a closed job to appear again if Castle reopens it", async () => {
@@ -200,6 +261,46 @@ describe("Service-look", () => {
     expect(result.messages[0]).toMatchObject({ type: "flex" });
   });
 
+  it("mentions a technician assigned to every district in the matching province", () => {
+    const rayongJob = {
+      ...job(1),
+      province: "จ.ระยอง",
+      district: "อ.เมืองระยอง",
+    };
+    const result = formatServiceLookMessages(
+      { checkedAt: "", totalJobs: 1, jobs: [rayongJob] },
+      [rayongJob],
+      "new",
+      [areaMention({ province: "ระยอง", district: "ทุกอำเภอ" })],
+    );
+
+    expect(serviceAreaMentionMatchesJob(
+      areaMention({ province: "ระยอง", district: "ทุกอำเภอ" }),
+      rayongJob,
+    )).toBe(true);
+
+    expect(result.messages[0]).toMatchObject({
+      type: "textV2",
+      substitution: {
+        technician0: {
+          mentionee: { userId: "U285cef534729ee5bcfa1bf4d8e84e323" },
+        },
+      },
+    });
+  });
+
+  it("does not apply an every-district assignment to another province", () => {
+    const result = formatServiceLookMessages(
+      { checkedAt: "", totalJobs: 1, jobs: [job(1)] },
+      [job(1)],
+      "new",
+      [areaMention({ province: "ระยอง", district: "ทุกอำเภอ" })],
+    );
+
+    expect(result.messages).toHaveLength(1);
+    expect(result.messages[0]).toMatchObject({ type: "flex" });
+  });
+
   it("keeps the mention and Flex carousels within the five-message Reply limit", () => {
     const jobs = Array.from({ length: 60 }, (_, index) => ({
       ...job(index + 1),
@@ -215,6 +316,23 @@ describe("Service-look", () => {
     expect(result.messages).toHaveLength(5);
     expect(result.displayedJobs).toHaveLength(48);
     expect(result.messages[0]).toMatchObject({ type: "textV2" });
+  });
+
+  it("reserves one Reply slot for the receipt result in technician alerts", () => {
+    const jobs = Array.from({ length: 60 }, (_, index) => ({
+      ...job(index + 1),
+      district: "พานทอง",
+      province: "ชลบุรี",
+    }));
+    const result = formatServiceLookMessages(
+      { checkedAt: "", totalJobs: jobs.length, jobs },
+      jobs,
+      "new",
+      [areaMention()],
+      4,
+    );
+    expect(result.messages).toHaveLength(4);
+    expect(result.displayedJobs).toHaveLength(36);
   });
 
   it("mentions each technician only for jobs in their own area", () => {

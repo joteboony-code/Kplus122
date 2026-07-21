@@ -5,6 +5,7 @@ const MAX_BUBBLES_PER_CAROUSEL = 12;
 const MAX_REPLY_MESSAGES = 5;
 const MAX_MENTIONS_PER_MESSAGE = 20;
 const SEEN_STATE_PREFIX = "service-look:seen:";
+const TECHNICIAN_NOTIFIED_STATE_PREFIX = "service-alert:notified:";
 
 export interface CastleServiceJob {
   jobNumber: string;
@@ -125,6 +126,64 @@ export async function saveSeenServiceJobs(
   await store.put(seenStateKey(conversationId), JSON.stringify([...nextSeen]));
 }
 
+function technicianNotifiedStateKey(lineUserId: string): string {
+  return `${TECHNICIAN_NOTIFIED_STATE_PREFIX}${lineUserId}`;
+}
+
+export async function loadTechnicianNotifiedServiceJobKeys(
+  store: StateStore,
+  lineUserId: string,
+): Promise<Set<string>> {
+  const raw = await store.get(technicianNotifiedStateKey(lineUserId));
+  if (!raw) return new Set();
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return new Set();
+    return new Set(parsed.map((value) => cleanText(value, 300)).filter(Boolean));
+  } catch {
+    return new Set();
+  }
+}
+
+export function selectUnnotifiedServiceJobsForTechnician(
+  snapshot: CastleServiceSnapshot,
+  mentions: ServiceAreaMention[],
+  lineUserId: string,
+  notified: ReadonlySet<string>,
+): CastleServiceJob[] {
+  const technicianMentions = mentions.filter((mention) =>
+    mention.enabled && mention.lineUserId === lineUserId
+  );
+  if (technicianMentions.length === 0) return [];
+  return snapshot.jobs.filter((job) => {
+    const key = serviceJobKey(job);
+    return Boolean(
+      key &&
+      !notified.has(key) &&
+      technicianMentions.some((mention) =>
+        serviceAreaMentionMatchesJob(mention, job)
+      ),
+    );
+  });
+}
+
+export async function saveTechnicianNotifiedServiceJobs(
+  store: StateStore,
+  lineUserId: string,
+  previousNotified: ReadonlySet<string>,
+  notifiedJobs: CastleServiceJob[],
+): Promise<void> {
+  const nextNotified = new Set(previousNotified);
+  for (const job of notifiedJobs) {
+    const key = serviceJobKey(job);
+    if (key) nextNotified.add(key);
+  }
+  await store.put(
+    technicianNotifiedStateKey(lineUserId),
+    JSON.stringify([...nextNotified]),
+  );
+}
+
 function isHttpsUrl(value: string): boolean {
   try {
     return new URL(value).protocol === "https:";
@@ -150,13 +209,24 @@ function areaMatches(left: string, right: string): boolean {
   );
 }
 
+function districtMatches(assignedDistrict: string, jobDistrict: string): boolean {
+  const wildcard = assignedDistrict.normalize("NFKC").toLocaleLowerCase("th-TH")
+    .replace(/\s+/g, "");
+  const wildcardLabels = ["*", "ทุกอำเภอ", "ทุกเขต", "ทั้งหมด"]
+    .map((value) => value.normalize("NFKC").toLocaleLowerCase("th-TH"));
+  if (wildcardLabels.includes(wildcard)) {
+    return true;
+  }
+  return areaMatches(assignedDistrict, jobDistrict);
+}
+
 export function serviceAreaMentionMatchesJob(
   mention: ServiceAreaMention,
   job: CastleServiceJob,
 ): boolean {
   return mention.enabled &&
     areaMatches(mention.province, job.province) &&
-    areaMatches(mention.district, job.district);
+    districtMatches(mention.district, job.district);
 }
 
 function jobHasMention(
@@ -295,14 +365,16 @@ export function formatServiceLookMessages(
   newJobs: CastleServiceJob[],
   mode: "new" | "all" = "new",
   areaMentions: ServiceAreaMention[] = [],
+  maxMessages = MAX_REPLY_MESSAGES,
 ): ServiceLookMessages {
+  const boundedMaxMessages = Math.max(1, Math.min(MAX_REPLY_MESSAGES, maxMessages));
   const assignedJobs = newJobs.filter((job) => jobHasMention(job, areaMentions));
   const orderedJobs = assignedJobs.length > 0
     ? [...assignedJobs, ...newJobs.filter((job) => !jobHasMention(job, areaMentions))]
     : newJobs;
   const flexMessageLimit = assignedJobs.length > 0
-    ? MAX_REPLY_MESSAGES - 1
-    : MAX_REPLY_MESSAGES;
+    ? Math.max(0, boundedMaxMessages - 1)
+    : boundedMaxMessages;
   const displayedJobs = orderedJobs.slice(
     0,
     MAX_BUBBLES_PER_CAROUSEL * flexMessageLimit,
