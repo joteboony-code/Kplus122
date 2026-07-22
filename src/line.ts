@@ -23,6 +23,14 @@ function serviceLookQuickReply(): Record<string, unknown> {
       {
         type: "action",
         action: {
+          type: "uri",
+          label: "📦 Stock",
+          uri: "https://www.aomyim.me/app/eds",
+        },
+      },
+      {
+        type: "action",
+        action: {
           type: "postback",
           label: "🔍 Check Service",
           data: SERVICE_LOOK_POSTBACK_DATA,
@@ -34,14 +42,6 @@ function serviceLookQuickReply(): Record<string, unknown> {
           type: "postback",
           label: "Service ทั้งหมด",
           data: SERVICE_LOOK_ALL_POSTBACK_DATA,
-        },
-      },
-      {
-        type: "action",
-        action: {
-          type: "uri",
-          label: "📦 Stock",
-          uri: "https://www.aomyim.me/app/eds",
         },
       },
     ],

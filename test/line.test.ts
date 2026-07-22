@@ -198,6 +198,13 @@ describe("LINE webhook", () => {
         items: [
           {
             action: {
+              type: "uri",
+              label: "📦 Stock",
+              uri: "https://www.aomyim.me/app/eds",
+            },
+          },
+          {
+            action: {
               type: "postback",
               label: "🔍 Check Service",
               data: "action=service-look",
@@ -208,13 +215,6 @@ describe("LINE webhook", () => {
               type: "postback",
               label: "Service ทั้งหมด",
               data: "action=service-look-all",
-            },
-          },
-          {
-            action: {
-              type: "uri",
-              label: "📦 Stock",
-              uri: "https://www.aomyim.me/app/eds",
             },
           },
         ],
