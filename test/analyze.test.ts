@@ -14,6 +14,7 @@ import {
   isConfirmedKplusReceiptText,
   isKplusCandidateText,
   parseKplusVisualCandidate,
+  routeOcrSpaceDecision,
   shouldReplyAfterGoogleVision,
 } from "../src/analyze";
 
@@ -85,6 +86,42 @@ describe("receipt decision", () => {
     const accepted = acceptWorkerPaymentName(inspectReceiptText(text), text);
 
     expect(decideReceipt(accepted, 1.22, -1.22, 0.65).status).toBe("fail");
+  });
+
+  it.each([
+    "SALES THB 0.00\nTOTAL THB 0.00",
+    "AMT: THB 5.00",
+    "AMT: THB unreadable",
+  ])("sends OCR.space results without the expected amount to fallback: %s", (amountText) => {
+    const inspection = inspectConfirmedReceiptText(
+      `CHANNEL: KPLUS\nTHAI QR PAYMENT\nSETTLEMENT\n${amountText}`,
+    );
+    const decision = decideReceipt(inspection, 1.22, -1.22, 0.65);
+
+    expect(routeOcrSpaceDecision(decision, inspection)).toBe("fallback");
+  });
+
+  it.each(["1.22", "-1.22"])(
+    "finishes at OCR.space when the expected amount %s is found",
+    (amount) => {
+      const inspection = inspectConfirmedReceiptText(
+        `CHANNEL: KPLUS\nSETTLEMENT\nAMT: THB ${amount}`,
+      );
+      const decision = decideReceipt(inspection, 1.22, -1.22, 0.65);
+
+      expect(routeOcrSpaceDecision(decision, inspection)).toBe("pass");
+    },
+  );
+
+  it.each([
+    "CHANNEL: KPLUS\nTHAI QR PAYMENT\nAMT: THB 5.00",
+    "SETTLEMENT\nAMT: THB 5.00",
+    "THAI QR PAYMENT\nAMT: THB 5.00",
+  ])("does not send OCR.space partial evidence to fallback: %s", (text) => {
+    const inspection = inspectConfirmedReceiptText(text);
+    const decision = decideReceipt(inspection, 1.22, -1.22, 0.65);
+
+    expect(routeOcrSpaceDecision(decision, inspection)).toBe("ignore");
   });
 
   it("does not use generic receipt structure as Google evidence", () => {

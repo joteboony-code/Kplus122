@@ -9,6 +9,7 @@ import {
   inspectConfirmedReceiptText,
   inspectReceiptText,
   hasExpectedAmount,
+  routeOcrSpaceDecision,
   shouldReplyAfterGoogleVision,
   transcribeVisibleText,
 } from "./analyze";
@@ -598,9 +599,12 @@ async function processImageJob(
           expectedVoid,
           minConfidence,
         );
+        const ocrSpaceRoute = routeOcrSpaceDecision(
+          ocrSpaceDecision,
+          ocrSpaceInspection,
+        );
         updateTraceFromInspection(trace, ocrSpaceInspection, "ocr-space");
-        const ocrSpaceHasAnyAmount = ocrSpaceInspection.observedAmounts.length > 0;
-        if (ocrSpaceDecision.status === "pass") {
+        if (ocrSpaceRoute === "pass") {
           const matchedAmount = ocrSpaceInspection.observedAmounts.find(
             (amount) =>
               Math.abs(amount - expectedSale) < 0.005 ||
@@ -615,47 +619,7 @@ async function processImageJob(
           );
         }
 
-        if (
-          ocrSpaceInspection.isKplusReceipt &&
-          ocrSpaceInspection.hasSettlement &&
-          ocrSpaceHasAnyAmount
-        ) {
-          if (await hasRecentPass(job, d1StateStore(env.CONTROL_DB))) {
-            console.log(JSON.stringify({
-              event: "image_ignored",
-              webhookEventId: job.webhookEventId,
-              stage: "recent-pass-suppression",
-              ocrProvider: "ocr-space",
-            }));
-            return IGNORED_RESULT;
-          }
-
-          console.log(JSON.stringify({
-            event: "receipt_processed",
-            webhookEventId: job.webhookEventId,
-            status: ocrSpaceDecision.status,
-            confidence: ocrSpaceInspection.confidence,
-            hasSettlement: ocrSpaceInspection.hasSettlement,
-            ocrProvider: "ocr-space",
-            ocrSpaceUsage,
-          }));
-          return {
-            outcome: "fail",
-            evidence: {
-              kind: "wrong-amount",
-              text: formatDecision(ocrSpaceInspection, ocrSpaceDecision),
-            },
-          };
-        }
-
-        const ocrSpaceCandidate = hasGoogleCandidateTextEvidence(
-          inspectReceiptText(ocrSpaceResult.text),
-          expectedSale,
-          expectedVoid,
-          ocrSpaceResult.text,
-        );
-
-        if (!ocrSpaceCandidate) {
+        if (ocrSpaceRoute === "ignore") {
           trace.stage = "ocr-space-filter";
           console.log(JSON.stringify({
             event: "image_ignored",
@@ -669,7 +633,7 @@ async function processImageJob(
         console.log(JSON.stringify({
           event: "ocr_space_fallback",
           webhookEventId: job.webhookEventId,
-          reason: "partial-evidence",
+          reason: "expected-amount-not-found",
           ocrSpaceUsage,
         }));
       }

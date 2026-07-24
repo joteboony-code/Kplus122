@@ -251,6 +251,16 @@ export function decideReceipt(
     : { status: "fail", failures };
 }
 
+export function routeOcrSpaceDecision(
+  decision: ReceiptDecision,
+  inspection: ReceiptInspection,
+): "pass" | "fallback" | "ignore" {
+  if (decision.status === "pass") return "pass";
+  return inspection.isKplusReceipt && inspection.hasSettlement
+    ? "fallback"
+    : "ignore";
+}
+
 export function shouldReplyAfterGoogleVision(
   inspection: ReceiptInspection,
 ): boolean {
