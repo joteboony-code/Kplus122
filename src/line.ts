@@ -49,7 +49,8 @@ function serviceLookQuickReply(): Record<string, unknown> {
   };
 }
 
-export function stockFlexMessage(): Record<string, unknown> {
+export function stockFlexMessage(tid?: string): Record<string, unknown> {
+  const displayTid = /^\d{8}$/.test(tid ?? "") ? tid : "ไม่ระบุ";
   return {
     type: "flex",
     altText: "เปิด Stock เพื่อกรอกข้อมูลงาน",
@@ -68,6 +69,13 @@ export function stockFlexMessage(): Record<string, unknown> {
             weight: "bold",
             size: "md",
             color: "#11884A",
+          },
+          {
+            type: "text",
+            text: `Tid: ${displayTid}`,
+            weight: "bold",
+            size: "sm",
+            color: "#333333",
           },
           {
             type: "text",
@@ -381,7 +389,7 @@ export async function sendInspectionResultWithMethod(
   const messages = [
     inspectionMessage(job, text) as Record<string, unknown>,
     ...additionalMessages,
-    ...(includeStockFlex ? [stockFlexMessage()] : []),
+    ...(includeStockFlex ? [stockFlexMessage(job.referenceCode)] : []),
   ];
   if (messages.length > 5) {
     throw new Error("LINE reply requires no more than 5 messages");

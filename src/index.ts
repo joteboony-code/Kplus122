@@ -356,7 +356,7 @@ async function replyStockFlexOnce(
   try {
     const sent = await sendReplyMessages(
       job,
-      [stockFlexMessage()],
+      [stockFlexMessage(job.referenceCode)],
       env.LINE_CHANNEL_ACCESS_TOKEN,
     );
     if (!sent) throw new Error("LINE Stock Flex reply failed");

@@ -342,11 +342,18 @@ describe("LINE webhook", () => {
   });
 
   it("builds the Stock Flex used when an image has no inspection reply", () => {
-    expect(stockFlexMessage()).toMatchObject({
+    expect(stockFlexMessage("28253214")).toMatchObject({
       type: "flex",
       altText: "เปิด Stock เพื่อกรอกข้อมูลงาน",
       contents: {
         type: "bubble",
+        body: {
+          contents: [
+            { text: "📦 Stock" },
+            { text: "Tid: 28253214" },
+            { text: "กรอกข้อมูลงานหลังส่งรูป" },
+          ],
+        },
         footer: {
           contents: [{
             action: {
@@ -355,6 +362,20 @@ describe("LINE webhook", () => {
               uri: "https://www.aomyim.me/app/eds",
             },
           }],
+        },
+      },
+    });
+  });
+
+  it("shows an unspecified Tid when no valid 8-digit reference exists", () => {
+    expect(stockFlexMessage("123")).toMatchObject({
+      contents: {
+        body: {
+          contents: [
+            { text: "📦 Stock" },
+            { text: "Tid: ไม่ระบุ" },
+            { text: "กรอกข้อมูลงานหลังส่งรูป" },
+          ],
         },
       },
     });
