@@ -195,32 +195,22 @@ describe("LINE webhook", () => {
     expect(payload.messages[0]).toMatchObject({
       type: "text",
       text: "ผลตรวจ",
-      quickReply: {
-        items: [
-          {
-            action: {
-              type: "uri",
-              label: "📦 Stock",
-              uri: "https://www.aomyim.me/app/eds",
-            },
-          },
-          {
-            action: {
-              type: "postback",
-              label: "🔍 Check Service",
-              data: "action=service-look",
-            },
-          },
-          {
-            action: {
-              type: "postback",
-              label: "Service ทั้งหมด",
-              data: "action=service-look-all",
-            },
-          },
-        ],
+    });
+    expect(payload.messages[0]).not.toHaveProperty("quickReply");
+    expect(payload.messages[1]).toMatchObject({
+      type: "flex",
+      altText: "เปิด Stock เพื่อกรอกข้อมูลงาน",
+      contents: {
+        body: {
+          contents: [
+            { text: "📦 Stock" },
+            { text: "Tid: ไม่ระบุ" },
+            { text: "กรอกข้อมูลงานหลังส่งรูป" },
+          ],
+        },
       },
     });
+    expect(payload.messages[1]).toHaveProperty("quickReply");
   });
 
   it("adds the Service quick reply only to the last reply message", async () => {
@@ -314,7 +304,7 @@ describe("LINE webhook", () => {
     );
   });
 
-  it("does not append Stock Flex to an inspection result", async () => {
+  it("appends Stock Flex to an inspection result", async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
     const job = {
@@ -336,9 +326,14 @@ describe("LINE webhook", () => {
     const payload = JSON.parse(String(init.body)) as {
       messages: Array<Record<string, unknown>>;
     };
-    expect(payload.messages).toHaveLength(1);
+    expect(payload.messages).toHaveLength(2);
     expect(payload.messages[0]).toMatchObject({ type: "textV2" });
-    expect(payload.messages[0]).toHaveProperty("quickReply");
+    expect(payload.messages[0]).not.toHaveProperty("quickReply");
+    expect(payload.messages[1]).toMatchObject({
+      type: "flex",
+      altText: "เปิด Stock เพื่อกรอกข้อมูลงาน",
+    });
+    expect(payload.messages[1]).toHaveProperty("quickReply");
   });
 
   it("builds the Stock Flex used when an image has no inspection reply", () => {
@@ -408,13 +403,18 @@ describe("LINE webhook", () => {
     const payload = JSON.parse(String(init.body)) as {
       messages: Array<Record<string, unknown>>;
     };
-    expect(payload.messages).toHaveLength(3);
+    expect(payload.messages).toHaveLength(4);
     expect(payload.messages[0]).toMatchObject({
       type: "textV2",
       text: "{sender}\nผลตรวจ",
     });
     expect(payload.messages[0]).not.toHaveProperty("quickReply");
     expect(payload.messages[1]).not.toHaveProperty("quickReply");
-    expect(payload.messages[2]).toHaveProperty("quickReply");
+    expect(payload.messages[2]).not.toHaveProperty("quickReply");
+    expect(payload.messages[3]).toMatchObject({
+      type: "flex",
+      altText: "เปิด Stock เพื่อกรอกข้อมูลงาน",
+    });
+    expect(payload.messages[3]).toHaveProperty("quickReply");
   });
 });
