@@ -116,7 +116,7 @@ async function prepareTechnicianServiceAlert(
       newJobs,
       "new",
       areaMentions,
-      3,
+      4,
     );
     return {
       lineUserId,
@@ -388,7 +388,6 @@ async function replyKplusSuccess(
 
   trace.lineDeliveryStatus = "pending";
   let method: LineDeliveryMethod | null = null;
-  const includeStock = await claimStockFlex(job, env);
   const serviceAlert = await prepareTechnicianServiceAlert(job, env);
   try {
     method = await sendInspectionResultWithMethod(
@@ -396,7 +395,6 @@ async function replyKplusSuccess(
       formatKplusSuccess(amount),
       env.LINE_CHANNEL_ACCESS_TOKEN,
       serviceAlert?.messages ?? [],
-      includeStock,
     );
     if (!method) throw new Error("LINE inspection result delivery failed");
     trace.lineDeliveryStatus = "sent";
@@ -407,10 +405,8 @@ async function replyKplusSuccess(
     if (roundKey) {
       await env.RECEIPT_ROUNDS.getByName(roundKey).releasePass(job);
     }
-    if (includeStock) await releaseStockFlex(job, env);
     throw error;
   }
-  if (includeStock) await completeStockFlex(job, env);
   await recordTechnicianServiceAlert(serviceAlert, env, job.webhookEventId);
   if (roundKey) {
     try {
@@ -458,7 +454,6 @@ async function replyKplusFailure(
   }
 
   trace.lineDeliveryStatus = "pending";
-  const includeStock = await claimStockFlex(job, env);
   const serviceAlert = await prepareTechnicianServiceAlert(job, env);
   try {
     const method = await sendInspectionResultWithMethod(
@@ -466,7 +461,6 @@ async function replyKplusFailure(
       text,
       env.LINE_CHANNEL_ACCESS_TOKEN,
       serviceAlert?.messages ?? [],
-      includeStock,
     );
     if (method !== "reply") throw new Error("LINE inspection reply failed");
     trace.lineDeliveryStatus = "sent";
@@ -477,10 +471,8 @@ async function replyKplusFailure(
     if (roundKey) {
       await env.RECEIPT_ROUNDS.getByName(roundKey).releaseFailure(job);
     }
-    if (includeStock) await releaseStockFlex(job, env);
     throw error;
   }
-  if (includeStock) await completeStockFlex(job, env);
 
   await recordTechnicianServiceAlert(serviceAlert, env, job.webhookEventId);
 

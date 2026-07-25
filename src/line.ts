@@ -376,7 +376,7 @@ export async function sendInspectionResultWithMethod(
   text: string,
   channelAccessToken: string,
   additionalMessages: Record<string, unknown>[] = [],
-  includeStockFlex = true,
+  includeStockFlex = false,
 ): Promise<"reply" | null> {
   const messages = [
     inspectionMessage(job, text) as Record<string, unknown>,
