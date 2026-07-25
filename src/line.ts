@@ -9,6 +9,7 @@ const LINE_DATA_API = "https://api-data.line.me";
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 const SERVICE_LOOK_POSTBACK_DATA = "action=service-look";
 const SERVICE_LOOK_ALL_POSTBACK_DATA = "action=service-look-all";
+const STOCK_URL = "https://www.aomyim.me/app/eds";
 const SERVICE_LOOK_TEXT_COMMANDS = new Set([
   "service-look",
   "เช็กงาน",
@@ -25,7 +26,7 @@ function serviceLookQuickReply(): Record<string, unknown> {
         action: {
           type: "uri",
           label: "📦 Stock",
-          uri: "https://www.aomyim.me/app/eds",
+          uri: STOCK_URL,
         },
       },
       {
@@ -45,6 +46,56 @@ function serviceLookQuickReply(): Record<string, unknown> {
         },
       },
     ],
+  };
+}
+
+export function stockFlexMessage(): Record<string, unknown> {
+  return {
+    type: "flex",
+    altText: "เปิด Stock เพื่อกรอกข้อมูลงาน",
+    contents: {
+      type: "bubble",
+      size: "micro",
+      body: {
+        type: "box",
+        layout: "vertical",
+        paddingAll: "12px",
+        spacing: "sm",
+        contents: [
+          {
+            type: "text",
+            text: "📦 Stock",
+            weight: "bold",
+            size: "md",
+            color: "#11884A",
+          },
+          {
+            type: "text",
+            text: "กรอกข้อมูลงานหลังส่งรูป",
+            size: "xs",
+            color: "#777777",
+            wrap: true,
+          },
+        ],
+      },
+      footer: {
+        type: "box",
+        layout: "vertical",
+        paddingAll: "10px",
+        paddingTop: "0px",
+        contents: [{
+          type: "button",
+          style: "primary",
+          height: "sm",
+          color: "#08A65C",
+          action: {
+            type: "uri",
+            label: "เปิด Stock",
+            uri: STOCK_URL,
+          },
+        }],
+      },
+    },
   };
 }
 
@@ -325,10 +376,12 @@ export async function sendInspectionResultWithMethod(
   text: string,
   channelAccessToken: string,
   additionalMessages: Record<string, unknown>[] = [],
+  includeStockFlex = true,
 ): Promise<"reply" | null> {
   const messages = [
     inspectionMessage(job, text) as Record<string, unknown>,
     ...additionalMessages,
+    ...(includeStockFlex ? [stockFlexMessage()] : []),
   ];
   if (messages.length > 5) {
     throw new Error("LINE reply requires no more than 5 messages");

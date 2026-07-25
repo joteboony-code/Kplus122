@@ -3,15 +3,18 @@ import { env } from "cloudflare:test";
 import {
   claimRoundFailure,
   claimRoundPass,
+  claimRoundStock,
   completeRoundAfterFailure,
   completeRoundFinalization,
   completeRoundAfterPass,
+  completeRoundStock,
   finalizeRound,
   receiptRoundKey,
   recordRoundActivity,
   releaseRoundFinalization,
   releaseRoundFailure,
   releaseRoundPass,
+  releaseRoundStock,
   ROUND_INACTIVITY_SECONDS,
 } from "../src/receipt-round";
 import type { StateStore } from "../src/state-store";
@@ -233,6 +236,37 @@ describe("receipt round state", () => {
     expect(await claimRoundPass(pass, state, 10_000)).toBe("acquired");
     await releaseRoundPass(pass, state);
     expect(await claimRoundPass(pass, state, 10_001)).toBe("acquired");
+  });
+
+  it("allows only one Stock Flex reply per sender round", async () => {
+    const state = memoryState();
+    const first = job("stock-one");
+    const second = job("stock-two");
+
+    expect(await claimRoundStock(first, state, 10_000)).toBe("acquired");
+    expect(await claimRoundStock(second, state, 10_001)).toBe("suppressed");
+    await completeRoundStock(first, state, 10_002);
+    expect(await claimRoundStock(second, state, 10_003)).toBe("suppressed");
+  });
+
+  it("releases a failed Stock Flex delivery so another image can retry", async () => {
+    const state = memoryState();
+    const first = job("stock-failed");
+    const second = job("stock-retry");
+
+    expect(await claimRoundStock(first, state, 10_000)).toBe("acquired");
+    await releaseRoundStock(first, state);
+    expect(await claimRoundStock(second, state, 10_001)).toBe("acquired");
+  });
+
+  it("allows Stock Flex again when a later image round starts", async () => {
+    const state = memoryState();
+    const first = job("stock-old");
+    const later = job("stock-later");
+
+    expect(await claimRoundStock(first, state, 10_000)).toBe("acquired");
+    await completeRoundStock(first, state, 10_001);
+    expect(await claimRoundStock(later, state, 70_002)).toBe("acquired");
   });
 
   it("leases finalization until delivery succeeds or the lease is released", async () => {

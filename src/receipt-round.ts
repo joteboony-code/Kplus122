@@ -26,6 +26,9 @@ interface ReceiptRoundState {
   failureOwnerMessageId?: string;
   failureClaimedAt?: number;
   failureCompletedAt?: number;
+  stockOwnerMessageId?: string;
+  stockClaimedAt?: number;
+  stockCompletedAt?: number;
   finalizationClaimedAt?: number;
 }
 
@@ -37,6 +40,7 @@ export interface RoundFinalization {
 
 export type RoundPassClaim = "acquired" | "busy" | "suppressed";
 export type RoundFailureClaim = "acquired" | "busy" | "suppressed";
+export type RoundStockClaim = "acquired" | "busy" | "suppressed";
 
 function passClaimIsActive(current: ReceiptRoundState, now: number): boolean {
   return current.passOwnerMessageId !== undefined &&
@@ -48,6 +52,12 @@ function failureClaimIsActive(current: ReceiptRoundState, now: number): boolean 
   return current.failureOwnerMessageId !== undefined &&
     current.failureClaimedAt !== undefined &&
     now - current.failureClaimedAt < ROUND_PASS_CLAIM_LEASE_SECONDS * 1000;
+}
+
+function stockClaimIsActive(current: ReceiptRoundState, now: number): boolean {
+  return current.stockOwnerMessageId !== undefined &&
+    current.stockClaimedAt !== undefined &&
+    now - current.stockClaimedAt < ROUND_PASS_CLAIM_LEASE_SECONDS * 1000;
 }
 
 export function receiptRoundKey(job: ImageJob): string | null {
@@ -146,6 +156,7 @@ export async function claimRoundPass(
     ? current.processedMessageIds
     : [...(current?.processedMessageIds ?? []), job.messageId];
   await state.put(roundKey, JSON.stringify({
+    ...current,
     generation: crypto.randomUUID(),
     updatedAt: now,
     processedMessageIds,
@@ -224,6 +235,87 @@ export async function releaseRoundFailure(
   });
 }
 
+export async function claimRoundStock(
+  job: ImageJob,
+  state: StateStore,
+  now = Date.now(),
+): Promise<RoundStockClaim> {
+  const roundKey = receiptRoundKey(job);
+  if (!roundKey) return "acquired";
+
+  const current = parseRoundState(await state.get(roundKey));
+  const wasRecentlyCompleted = (timestamp: number | undefined) =>
+    timestamp !== undefined &&
+    now - timestamp < ROUND_COMPLETED_SUPPRESSION_SECONDS * 1000;
+  if (
+    wasRecentlyCompleted(current?.stockCompletedAt) ||
+    wasRecentlyCompleted(current?.completedAt) ||
+    wasRecentlyCompleted(current?.failureCompletedAt)
+  ) {
+    return "suppressed";
+  }
+  if (current && stockClaimIsActive(current, now)) {
+    return current.stockOwnerMessageId === job.messageId
+      ? "busy"
+      : "suppressed";
+  }
+
+  const processedMessageIds = current?.processedMessageIds.includes(job.messageId)
+    ? current.processedMessageIds
+    : [...(current?.processedMessageIds ?? []), job.messageId];
+  await state.put(roundKey, JSON.stringify({
+    ...current,
+    generation: crypto.randomUUID(),
+    updatedAt: now,
+    processedMessageIds,
+    stockOwnerMessageId: job.messageId,
+    stockClaimedAt: now,
+  } satisfies ReceiptRoundState), { expirationTtl: ROUND_STATE_TTL_SECONDS });
+  return "acquired";
+}
+
+export async function releaseRoundStock(
+  job: ImageJob,
+  state: StateStore,
+): Promise<void> {
+  const roundKey = receiptRoundKey(job);
+  if (!roundKey) return;
+  const current = parseRoundState(await state.get(roundKey));
+  if (!current || current.stockOwnerMessageId !== job.messageId) return;
+  const {
+    stockOwnerMessageId: _owner,
+    stockClaimedAt: _claimedAt,
+    ...next
+  } = current;
+  await state.put(roundKey, JSON.stringify(next), {
+    expirationTtl: ROUND_STATE_TTL_SECONDS,
+  });
+}
+
+export async function completeRoundStock(
+  job: ImageJob,
+  state: StateStore,
+  now = Date.now(),
+): Promise<void> {
+  const roundKey = receiptRoundKey(job);
+  if (!roundKey) return;
+  const current = parseRoundState(await state.get(roundKey));
+  if (!current || current.stockOwnerMessageId !== job.messageId) return;
+  const {
+    stockOwnerMessageId: _owner,
+    stockClaimedAt: _claimedAt,
+    ...completed
+  } = current;
+  await state.put(roundKey, JSON.stringify({
+    ...completed,
+    generation: crypto.randomUUID(),
+    updatedAt: now,
+    stockCompletedAt: now,
+  } satisfies ReceiptRoundState), {
+    expirationTtl: ROUND_STATE_TTL_SECONDS,
+  });
+}
+
 export async function completeRoundAfterFailure(
   job: ImageJob,
   state: StateStore,
@@ -263,7 +355,17 @@ export async function completeRoundAfterPass(
   ) {
     return;
   }
+  const {
+    passOwnerMessageId: _owner,
+    passClaimedAt: _claimedAt,
+    ...completed
+  } = current ?? {
+    generation: crypto.randomUUID(),
+    updatedAt: now,
+    processedMessageIds: [],
+  };
   const next: ReceiptRoundState = {
+    ...completed,
     generation: crypto.randomUUID(),
     updatedAt: now,
     processedMessageIds: current?.processedMessageIds.includes(job.messageId)

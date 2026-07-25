@@ -39,6 +39,7 @@ import {
   sendReplyMessages,
   sendInspectionResultWithMethod,
   serviceLookContextFromEvent,
+  stockFlexMessage,
   verifyLineSignature,
   type ServiceLookContext,
 } from "./line";
@@ -115,7 +116,7 @@ async function prepareTechnicianServiceAlert(
       newJobs,
       "new",
       areaMentions,
-      4,
+      3,
     );
     return {
       lineUserId,
@@ -324,6 +325,53 @@ function numericSetting(value: string, name: string): number {
   return parsed;
 }
 
+async function claimStockFlex(job: ImageJob, env: Env): Promise<boolean> {
+  const roundKey = receiptRoundKey(job);
+  if (!roundKey) return true;
+  return (await env.RECEIPT_ROUNDS.getByName(roundKey).claimStock(job)) ===
+    "acquired";
+}
+
+async function releaseStockFlex(job: ImageJob, env: Env): Promise<void> {
+  const roundKey = receiptRoundKey(job);
+  if (!roundKey) return;
+  await env.RECEIPT_ROUNDS.getByName(roundKey).releaseStock(job);
+}
+
+async function completeStockFlex(job: ImageJob, env: Env): Promise<void> {
+  const roundKey = receiptRoundKey(job);
+  if (!roundKey) return;
+  await env.RECEIPT_ROUNDS.getByName(roundKey).completeStock(job);
+}
+
+async function replyStockFlexOnce(
+  job: ImageJob,
+  env: Env,
+  trace: InspectionTrace,
+): Promise<"sent" | "suppressed"> {
+  const includeStock = await claimStockFlex(job, env);
+  if (!includeStock) return "suppressed";
+
+  trace.lineDeliveryStatus = "pending";
+  try {
+    const sent = await sendReplyMessages(
+      job,
+      [stockFlexMessage()],
+      env.LINE_CHANNEL_ACCESS_TOKEN,
+    );
+    if (!sent) throw new Error("LINE Stock Flex reply failed");
+    await completeStockFlex(job, env);
+    trace.lineDeliveryStatus = "sent";
+    trace.lineDeliveryMethod = "reply";
+    return "sent";
+  } catch (error) {
+    trace.lineDeliveryStatus = "failed";
+    delete trace.lineDeliveryMethod;
+    await releaseStockFlex(job, env);
+    throw error;
+  }
+}
+
 async function replyKplusSuccess(
   job: ImageJob,
   amount: number,
@@ -340,6 +388,7 @@ async function replyKplusSuccess(
 
   trace.lineDeliveryStatus = "pending";
   let method: LineDeliveryMethod | null = null;
+  const includeStock = await claimStockFlex(job, env);
   const serviceAlert = await prepareTechnicianServiceAlert(job, env);
   try {
     method = await sendInspectionResultWithMethod(
@@ -347,6 +396,7 @@ async function replyKplusSuccess(
       formatKplusSuccess(amount),
       env.LINE_CHANNEL_ACCESS_TOKEN,
       serviceAlert?.messages ?? [],
+      includeStock,
     );
     if (!method) throw new Error("LINE inspection result delivery failed");
     trace.lineDeliveryStatus = "sent";
@@ -357,8 +407,10 @@ async function replyKplusSuccess(
     if (roundKey) {
       await env.RECEIPT_ROUNDS.getByName(roundKey).releasePass(job);
     }
+    if (includeStock) await releaseStockFlex(job, env);
     throw error;
   }
+  if (includeStock) await completeStockFlex(job, env);
   await recordTechnicianServiceAlert(serviceAlert, env, job.webhookEventId);
   if (roundKey) {
     try {
@@ -406,6 +458,7 @@ async function replyKplusFailure(
   }
 
   trace.lineDeliveryStatus = "pending";
+  const includeStock = await claimStockFlex(job, env);
   const serviceAlert = await prepareTechnicianServiceAlert(job, env);
   try {
     const method = await sendInspectionResultWithMethod(
@@ -413,6 +466,7 @@ async function replyKplusFailure(
       text,
       env.LINE_CHANNEL_ACCESS_TOKEN,
       serviceAlert?.messages ?? [],
+      includeStock,
     );
     if (method !== "reply") throw new Error("LINE inspection reply failed");
     trace.lineDeliveryStatus = "sent";
@@ -423,8 +477,10 @@ async function replyKplusFailure(
     if (roundKey) {
       await env.RECEIPT_ROUNDS.getByName(roundKey).releaseFailure(job);
     }
+    if (includeStock) await releaseStockFlex(job, env);
     throw error;
   }
+  if (includeStock) await completeStockFlex(job, env);
 
   await recordTechnicianServiceAlert(serviceAlert, env, job.webhookEventId);
 
@@ -912,6 +968,7 @@ export default {
             messageId: job.messageId,
             stage: "processing-disabled",
           }));
+          await replyStockFlexOnce(job, env, trace);
           await markImageProcessed(job, operationalState);
           await recordStat(env, "processed");
           await recordStat(env, "ignored");
@@ -933,6 +990,9 @@ export default {
             trace.lineDeliveryStatus = "not_applicable";
             result = IGNORED_RESULT;
           }
+        }
+        if (result.outcome === "ignored") {
+          await replyStockFlexOnce(job, env, trace);
         }
         trace.lineDeliveryStatus ??=
           result.evidence ? "pending" : "not_applicable";
@@ -960,6 +1020,19 @@ export default {
       } catch (error) {
         await recordStat(env, "errors");
         trace.stage ??= "processing-error";
+        if (trace.lineDeliveryStatus !== "sent") {
+          try {
+            await replyStockFlexOnce(job, env, trace);
+          } catch (stockError) {
+            console.warn(JSON.stringify({
+              event: "stock_flex_fallback_failed",
+              messageId: job.messageId,
+              error: stockError instanceof Error
+                ? stockError.message
+                : "unknown error",
+            }));
+          }
+        }
         await recordAuditSafely(
           env,
           job,

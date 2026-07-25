@@ -189,11 +189,15 @@ describe("LINE webhook", () => {
 
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     const payload = JSON.parse(String(init.body)) as {
-      messages: Array<{ type: string; text: string }>;
+      messages: Array<Record<string, unknown>>;
     };
     expect(payload.messages[0]).toMatchObject({
       type: "text",
       text: "ผลตรวจ",
+    });
+    expect(payload.messages[1]).toMatchObject({
+      type: "flex",
+      altText: "เปิด Stock เพื่อกรอกข้อมูลงาน",
       quickReply: {
         items: [
           {
@@ -313,6 +317,35 @@ describe("LINE webhook", () => {
     );
   });
 
+  it("can omit Stock Flex when another image already sent it for the round", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const job = {
+      webhookEventId: "event-stock-suppressed",
+      messageId: "image-stock-suppressed",
+      replyToken: "reply-token",
+      replyTarget: "group-1",
+      sourceType: "group" as const,
+      senderUserId: "U123",
+    };
+
+    expect(await sendInspectionResultWithMethod(
+      job,
+      "ผลตรวจ",
+      "channel-token",
+      [],
+      false,
+    )).toBe("reply");
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const payload = JSON.parse(String(init.body)) as {
+      messages: Array<Record<string, unknown>>;
+    };
+    expect(payload.messages).toHaveLength(1);
+    expect(payload.messages[0]).toMatchObject({ type: "textV2" });
+    expect(payload.messages[0]).toHaveProperty("quickReply");
+  });
+
   it("sends the inspection result and Service alert in one Reply request", async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
@@ -340,13 +373,18 @@ describe("LINE webhook", () => {
     const payload = JSON.parse(String(init.body)) as {
       messages: Array<Record<string, unknown>>;
     };
-    expect(payload.messages).toHaveLength(3);
+    expect(payload.messages).toHaveLength(4);
     expect(payload.messages[0]).toMatchObject({
       type: "textV2",
       text: "{sender}\nผลตรวจ",
     });
     expect(payload.messages[0]).not.toHaveProperty("quickReply");
     expect(payload.messages[1]).not.toHaveProperty("quickReply");
-    expect(payload.messages[2]).toHaveProperty("quickReply");
+    expect(payload.messages[2]).not.toHaveProperty("quickReply");
+    expect(payload.messages[3]).toMatchObject({
+      type: "flex",
+      altText: "เปิด Stock เพื่อกรอกข้อมูลงาน",
+    });
+    expect(payload.messages[3]).toHaveProperty("quickReply");
   });
 });
