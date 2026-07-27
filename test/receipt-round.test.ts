@@ -259,14 +259,24 @@ describe("receipt round state", () => {
     expect(await claimRoundStock(second, state, 10_001)).toBe("acquired");
   });
 
-  it("allows Stock Flex again when a later image round starts", async () => {
+  it("keeps Stock Flex suppressed for later images with the same Tid", async () => {
     const state = memoryState();
-    const first = job("stock-old");
-    const later = job("stock-later");
+    const first = { ...job("stock-old"), referenceCode: "62777124" };
+    const later = { ...job("stock-later"), referenceCode: "62777124" };
 
     expect(await claimRoundStock(first, state, 10_000)).toBe("acquired");
     await completeRoundStock(first, state, 10_001);
-    expect(await claimRoundStock(later, state, 70_002)).toBe("acquired");
+    expect(await claimRoundStock(later, state, 10 * 60 * 1000)).toBe("suppressed");
+  });
+
+  it("allows Stock Flex again after the technician sends a new Tid", async () => {
+    const state = memoryState();
+    const first = { ...job("stock-old"), referenceCode: "62777124" };
+    const nextTid = { ...job("stock-new"), referenceCode: "62777125" };
+
+    expect(await claimRoundStock(first, state, 10_000)).toBe("acquired");
+    await completeRoundStock(first, state, 10_001);
+    expect(await claimRoundStock(nextTid, state, 10 * 60 * 1000)).toBe("acquired");
   });
 
   it("leases finalization until delivery succeeds or the lease is released", async () => {

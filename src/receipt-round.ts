@@ -2,7 +2,9 @@ import type { StateStore } from "./state-store";
 import type { ImageJob, RoundFinalizeJob } from "./types";
 
 export const ROUND_INACTIVITY_SECONDS = 20;
-export const ROUND_STATE_TTL_SECONDS = 10 * 60;
+// Keep the round state for at least as long as a technician's active Tid.
+// This prevents a later photo for the same Tid from receiving another Stock card.
+export const ROUND_STATE_TTL_SECONDS = 30 * 60;
 export const ROUND_COMPLETED_SUPPRESSION_SECONDS = 60;
 export const ROUND_FINALIZATION_LEASE_SECONDS = 45;
 export const ROUND_PASS_CLAIM_LEASE_SECONDS = 2 * 60;
@@ -244,14 +246,17 @@ export async function claimRoundStock(
   if (!roundKey) return "acquired";
 
   const current = parseRoundState(await state.get(roundKey));
+  // A Stock card belongs to a Tid, rather than to the short image round.
+  // A new Tid produces a different round key, so once delivered it remains
+  // suppressed for this key until its state expires.
+  if (current?.stockCompletedAt !== undefined) {
+    return "suppressed";
+  }
   const wasRecentlyCompleted = (timestamp: number | undefined) =>
     timestamp !== undefined &&
     now - timestamp < ROUND_COMPLETED_SUPPRESSION_SECONDS * 1000;
-  if (
-    wasRecentlyCompleted(current?.stockCompletedAt) ||
-    wasRecentlyCompleted(current?.completedAt) ||
-    wasRecentlyCompleted(current?.failureCompletedAt)
-  ) {
+  if (wasRecentlyCompleted(current?.completedAt) ||
+      wasRecentlyCompleted(current?.failureCompletedAt)) {
     return "suppressed";
   }
   if (current && stockClaimIsActive(current, now)) {
