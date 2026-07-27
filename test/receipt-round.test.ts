@@ -129,6 +129,61 @@ describe("receipt round state", () => {
     });
   });
 
+  it("uses the last image event time and keeps its Reply token for delayed Stock", async () => {
+    const state = memoryState();
+    const firstImage = { ...job("first"), timestamp: 1_000 };
+    const lastImage = { ...job("last"), timestamp: 8_000 };
+    await recordRoundActivity(
+      firstImage,
+      undefined,
+      state,
+      firstImage.timestamp,
+      "generation-first",
+    );
+    const finalizer = await recordRoundActivity(
+      lastImage,
+      undefined,
+      state,
+      lastImage.timestamp,
+      "generation-last",
+    );
+
+    expect(await finalizeRound(finalizer!, state, 27_999)).toEqual({
+      status: "waiting",
+      retryAfterSeconds: 1,
+    });
+    expect(await finalizeRound(finalizer!, state, 28_000)).toEqual({
+      status: "finalized",
+      evidence: undefined,
+      job: lastImage,
+    });
+  });
+
+  it("does not restart the quiet timer for an image that arrived before the latest image", async () => {
+    const state = memoryState();
+    const latest = { ...job("latest"), timestamp: 10_000 };
+    const older = { ...job("older"), timestamp: 5_000 };
+    const finalizer = await recordRoundActivity(
+      latest,
+      undefined,
+      state,
+      latest.timestamp,
+      "generation-latest",
+    );
+
+    expect(await recordRoundActivity(
+      older,
+      undefined,
+      state,
+      older.timestamp,
+      "generation-older",
+    )).toBeNull();
+    expect(await finalizeRound(finalizer!, state, 30_000)).toMatchObject({
+      status: "finalized",
+      job: latest,
+    });
+  });
+
   it("makes pending finalizers stale after an immediate pass", async () => {
     const state = memoryState();
     const finalizer = await recordRoundActivity(

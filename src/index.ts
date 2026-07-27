@@ -27,6 +27,7 @@ import { handleControlRequest, isProcessingEnabled } from "./control";
 import {
   purgeExpiredInspectionLogs,
   recordInspectionLog,
+  updateLineDeliveryStatus,
   type LineDeliveryMethod,
   type InspectionTrace,
 } from "./audit-log";
@@ -370,6 +371,27 @@ async function replyStockFlexOnce(
     delete trace.lineDeliveryMethod;
     await releaseStockFlex(job, env);
     throw error;
+  }
+}
+
+async function updateAuditLineDeliverySafely(
+  env: Env,
+  job: ImageJob,
+  status: "sent" | "failed",
+): Promise<void> {
+  try {
+    await updateLineDeliveryStatus(
+      env.CONTROL_DB,
+      job.messageId,
+      status,
+      status === "sent" ? "reply" : null,
+    );
+  } catch (auditError) {
+    console.error(JSON.stringify({
+      event: "inspection_delivery_log_update_failed",
+      messageId: job.messageId,
+      error: auditError instanceof Error ? auditError.message : "unknown error",
+    }));
   }
 }
 
@@ -924,7 +946,17 @@ async function deferStockFlexUntilRoundEnds(job: ImageJob, env: Env): Promise<vo
     undefined,
     crypto.randomUUID(),
   );
-  if (finalizer) await scheduleRoundFinalizer(finalizer, env);
+  if (!finalizer) return;
+
+  const eventTimestamp = job.timestamp;
+  const elapsedMs = typeof eventTimestamp === "number" && eventTimestamp > 0
+    ? Math.max(0, Date.now() - eventTimestamp)
+    : 0;
+  const delaySeconds = Math.max(
+    0,
+    Math.ceil((ROUND_INACTIVITY_SECONDS * 1000 - elapsedMs) / 1000),
+  );
+  await scheduleRoundFinalizer(finalizer, env, delaySeconds);
 }
 
 async function processRoundFinalizer(
@@ -941,14 +973,22 @@ async function processRoundFinalizer(
 
   try {
     if (result.job) {
-      await replyStockFlexOnce(
+      const delivery = await replyStockFlexOnce(
         result.job,
         env,
         { providers: [], providerTimings: {} },
       );
+      if (delivery === "sent") {
+        await updateAuditLineDeliverySafely(env, result.job, "sent");
+      }
     }
-  } finally {
     await coordinator.completeFinalization(finalizer);
+  } catch (error) {
+    if (result.job) {
+      await updateAuditLineDeliverySafely(env, result.job, "failed");
+    }
+    await coordinator.releaseFinalization(finalizer);
+    throw error;
   }
 }
 

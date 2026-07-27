@@ -40,12 +40,17 @@ export class ReceiptRoundCoordinator extends DurableObject<Env> {
     evidence: RoundEvidence | undefined,
     generation: string,
   ): Promise<RoundFinalizeJob | null> {
+    const activityAt = typeof job.timestamp === "number" &&
+      Number.isFinite(job.timestamp) &&
+      job.timestamp > 0
+      ? Math.min(job.timestamp, Date.now())
+      : Date.now();
     return this.ctx.storage.transaction((transaction) =>
       recordRoundActivity(
         job,
         evidence,
         this.transactionState(transaction),
-        Date.now(),
+        activityAt,
         generation,
       ));
   }
