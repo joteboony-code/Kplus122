@@ -47,6 +47,7 @@ import { hasRecentPass, recordRecentPass } from "./reply-state";
 import { isImageProcessed, markImageProcessed } from "./processing-state";
 import {
   receiptRoundKey,
+  ROUND_INACTIVITY_SECONDS,
   type RoundEvidence,
 } from "./receipt-round";
 export { ReceiptRoundCoordinator } from "./receipt-round-coordinator";
@@ -907,11 +908,48 @@ async function processImageJob(
   };
 }
 
-function discardLegacyRoundFinalizer(job: RoundFinalizeJob): void {
-  console.log(JSON.stringify({
-    event: "legacy_receipt_round_finalizer_discarded",
-    roundKey: job.roundKey,
-  }));
+async function scheduleRoundFinalizer(
+  finalizer: RoundFinalizeJob,
+  env: Env,
+  delaySeconds = ROUND_INACTIVITY_SECONDS,
+): Promise<void> {
+  await env.IMAGE_QUEUE.send(finalizer, { delaySeconds });
+}
+
+async function deferStockFlexUntilRoundEnds(job: ImageJob, env: Env): Promise<void> {
+  const roundKey = receiptRoundKey(job);
+  if (!roundKey) return;
+  const finalizer = await env.RECEIPT_ROUNDS.getByName(roundKey).recordActivity(
+    job,
+    undefined,
+    crypto.randomUUID(),
+  );
+  if (finalizer) await scheduleRoundFinalizer(finalizer, env);
+}
+
+async function processRoundFinalizer(
+  finalizer: RoundFinalizeJob,
+  env: Env,
+): Promise<void> {
+  const coordinator = env.RECEIPT_ROUNDS.getByName(finalizer.roundKey);
+  const result = await coordinator.finalize(finalizer);
+  if (result.status === "stale") return;
+  if (result.status === "waiting" || result.status === "busy") {
+    await scheduleRoundFinalizer(finalizer, env, result.retryAfterSeconds ?? 1);
+    return;
+  }
+
+  try {
+    if (result.job) {
+      await replyStockFlexOnce(
+        result.job,
+        env,
+        { providers: [], providerTimings: {} },
+      );
+    }
+  } finally {
+    await coordinator.completeFinalization(finalizer);
+  }
 }
 
 export default {
@@ -931,7 +969,7 @@ export default {
   async queue(batch, env): Promise<void> {
     for (const message of batch.messages) {
       if (isRoundFinalizeJob(message.body)) {
-        discardLegacyRoundFinalizer(message.body);
+        await processRoundFinalizer(message.body, env);
         message.ack();
         continue;
       }
@@ -968,7 +1006,7 @@ export default {
             messageId: job.messageId,
             stage: "processing-disabled",
           }));
-          await replyStockFlexOnce(job, env, trace);
+          await deferStockFlexUntilRoundEnds(job, env);
           await markImageProcessed(job, operationalState);
           await recordStat(env, "processed");
           await recordStat(env, "ignored");
@@ -992,7 +1030,7 @@ export default {
           }
         }
         if (result.outcome === "ignored") {
-          await replyStockFlexOnce(job, env, trace);
+          await deferStockFlexUntilRoundEnds(job, env);
         }
         trace.lineDeliveryStatus ??=
           result.evidence ? "pending" : "not_applicable";
@@ -1020,19 +1058,6 @@ export default {
       } catch (error) {
         await recordStat(env, "errors");
         trace.stage ??= "processing-error";
-        if (trace.lineDeliveryStatus !== "sent") {
-          try {
-            await replyStockFlexOnce(job, env, trace);
-          } catch (stockError) {
-            console.warn(JSON.stringify({
-              event: "stock_flex_fallback_failed",
-              messageId: job.messageId,
-              error: stockError instanceof Error
-                ? stockError.message
-                : "unknown error",
-            }));
-          }
-        }
         await recordAuditSafely(
           env,
           job,

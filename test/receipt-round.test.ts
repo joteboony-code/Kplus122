@@ -110,10 +110,11 @@ describe("receipt round state", () => {
     });
   });
 
-  it("stays silent when no KPLUS evidence was found", async () => {
+  it("returns the latest image for a delayed Stock reply when no KPLUS evidence was found", async () => {
     const state = memoryState();
+    const lastImage = job("one");
     const finalizer = await recordRoundActivity(
-      job("one"),
+      lastImage,
       undefined,
       state,
       0,
@@ -124,6 +125,7 @@ describe("receipt round state", () => {
     ).toEqual({
       status: "finalized",
       evidence: undefined,
+      job: lastImage,
     });
   });
 

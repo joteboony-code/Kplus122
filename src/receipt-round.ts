@@ -21,6 +21,7 @@ interface ReceiptRoundState {
   generation: string;
   updatedAt: number;
   processedMessageIds: string[];
+  latestJob?: ImageJob;
   evidence?: RoundEvidence;
   completedAt?: number;
   passOwnerMessageId?: string;
@@ -38,6 +39,7 @@ export interface RoundFinalization {
   status: "stale" | "waiting" | "busy" | "finalized";
   retryAfterSeconds?: number;
   evidence?: RoundEvidence;
+  job?: ImageJob;
 }
 
 export type RoundPassClaim = "acquired" | "busy" | "suppressed";
@@ -117,6 +119,9 @@ export async function recordRoundActivity(
   }
   if (current && passClaimIsActive(current, now)) return null;
   const active = current && current.completedAt === undefined ? current : null;
+  const previousTimestamp = active?.latestJob?.timestamp ?? Number.NEGATIVE_INFINITY;
+  const incomingTimestamp = job.timestamp ?? now;
+  if (active?.latestJob && incomingTimestamp < previousTimestamp) return null;
   const processedMessageIds = active?.processedMessageIds.includes(job.messageId)
     ? active.processedMessageIds
     : [...(active?.processedMessageIds ?? []), job.messageId];
@@ -124,6 +129,7 @@ export async function recordRoundActivity(
     generation,
     updatedAt: now,
     processedMessageIds,
+    latestJob: job,
     evidence: betterEvidence(active?.evidence, evidence),
   };
   await state.put(roundKey, JSON.stringify(next), {
@@ -426,7 +432,7 @@ export async function finalizeRound(
     ...current,
     finalizationClaimedAt: now,
   }), { expirationTtl: ROUND_STATE_TTL_SECONDS });
-  return { status: "finalized", evidence: current.evidence };
+  return { status: "finalized", evidence: current.evidence, job: current.latestJob };
 }
 
 export async function releaseRoundFinalization(
@@ -447,5 +453,18 @@ export async function completeRoundFinalization(
 ): Promise<void> {
   const current = parseRoundState(await state.get(job.roundKey));
   if (!current || current.generation !== job.generation) return;
-  await state.delete(job.roundKey);
+  const {
+    finalizationClaimedAt: _claim,
+    evidence: _evidence,
+    latestJob: _latestJob,
+    ...next
+  } = current;
+  await state.put(job.roundKey, JSON.stringify({
+    ...next,
+    generation: crypto.randomUUID(),
+    updatedAt: Date.now(),
+    processedMessageIds: [],
+  } satisfies ReceiptRoundState), {
+    expirationTtl: ROUND_STATE_TTL_SECONDS,
+  });
 }
