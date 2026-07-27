@@ -79,7 +79,7 @@ export function stockFlexMessage(tid?: string): Record<string, unknown> {
           },
           {
             type: "text",
-            text: "กรอกข้อมูลงานหลังส่งรูป",
+            text: "ใส่ข้อมูลอุปกรณ์ ให้ร้านค้า/รับคืน",
             size: "xs",
             color: "#777777",
             wrap: true,
