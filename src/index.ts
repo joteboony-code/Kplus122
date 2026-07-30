@@ -588,6 +588,9 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
   }
 
   if (jobs.length > 0) {
+    for (const job of jobs) {
+      await registerStockRoundImage(job, env);
+    }
     await env.IMAGE_QUEUE.sendBatch(jobs.map((body) => ({ body })));
   }
 
@@ -938,12 +941,11 @@ async function scheduleRoundFinalizer(
   await env.IMAGE_QUEUE.send(finalizer, { delaySeconds });
 }
 
-async function deferStockFlexUntilRoundEnds(job: ImageJob, env: Env): Promise<void> {
+async function registerStockRoundImage(job: ImageJob, env: Env): Promise<void> {
   const roundKey = receiptRoundKey(job);
   if (!roundKey) return;
-  const finalizer = await env.RECEIPT_ROUNDS.getByName(roundKey).recordActivity(
+  const finalizer = await env.RECEIPT_ROUNDS.getByName(roundKey).registerImage(
     job,
-    undefined,
     crypto.randomUUID(),
   );
   if (!finalizer) return;
@@ -957,6 +959,12 @@ async function deferStockFlexUntilRoundEnds(job: ImageJob, env: Env): Promise<vo
     Math.ceil((ROUND_INACTIVITY_SECONDS * 1000 - elapsedMs) / 1000),
   );
   await scheduleRoundFinalizer(finalizer, env, delaySeconds);
+}
+
+async function completeStockRoundImage(job: ImageJob, env: Env): Promise<void> {
+  const roundKey = receiptRoundKey(job);
+  if (!roundKey) return;
+  await env.RECEIPT_ROUNDS.getByName(roundKey).completeImage(job);
 }
 
 async function processRoundFinalizer(
@@ -1031,6 +1039,7 @@ export default {
             messageId: job.messageId,
             stage: "duplicate-suppression",
           }));
+          await completeStockRoundImage(job, env);
           await recordAuditSafely(env, job, "ignored", trace, startedAt);
           message.ack();
           continue;
@@ -1046,7 +1055,7 @@ export default {
             messageId: job.messageId,
             stage: "processing-disabled",
           }));
-          await deferStockFlexUntilRoundEnds(job, env);
+          await completeStockRoundImage(job, env);
           await markImageProcessed(job, operationalState);
           await recordStat(env, "processed");
           await recordStat(env, "ignored");
@@ -1070,7 +1079,7 @@ export default {
           }
         }
         if (result.outcome === "ignored") {
-          await deferStockFlexUntilRoundEnds(job, env);
+          await completeStockRoundImage(job, env);
         }
         trace.lineDeliveryStatus ??=
           result.evidence ? "pending" : "not_applicable";

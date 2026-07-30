@@ -6,8 +6,10 @@ import {
   completeRoundAfterFailure,
   completeRoundFinalization,
   completeRoundAfterPass,
+  completeRoundImage,
   completeRoundStock,
   finalizeRound,
+  registerRoundImage,
   recordRoundActivity,
   releaseRoundFailure,
   releaseRoundFinalization,
@@ -53,6 +55,29 @@ export class ReceiptRoundCoordinator extends DurableObject<Env> {
         activityAt,
         generation,
       ));
+  }
+
+  async registerImage(
+    job: ImageJob,
+    generation: string,
+  ): Promise<RoundFinalizeJob | null> {
+    const activityAt = typeof job.timestamp === "number" &&
+      Number.isFinite(job.timestamp) &&
+      job.timestamp > 0
+      ? Math.min(job.timestamp, Date.now())
+      : Date.now();
+    return this.ctx.storage.transaction((transaction) =>
+      registerRoundImage(
+        job,
+        this.transactionState(transaction),
+        activityAt,
+        generation,
+      ));
+  }
+
+  async completeImage(job: ImageJob): Promise<void> {
+    await this.ctx.storage.transaction((transaction) =>
+      completeRoundImage(job, this.transactionState(transaction)));
   }
 
   async completeAfterPass(job: ImageJob): Promise<void> {

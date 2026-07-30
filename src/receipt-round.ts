@@ -21,6 +21,7 @@ interface ReceiptRoundState {
   generation: string;
   updatedAt: number;
   processedMessageIds: string[];
+  pendingMessageIds?: string[];
   latestJob?: ImageJob;
   evidence?: RoundEvidence;
   completedAt?: number;
@@ -117,6 +118,7 @@ export async function recordRoundActivity(
   ) {
     return null;
   }
+  if (current?.stockCompletedAt !== undefined) return null;
   if (current && passClaimIsActive(current, now)) return null;
   const active = current && current.completedAt === undefined ? current : null;
   const previousTimestamp = active?.latestJob?.timestamp ?? Number.NEGATIVE_INFINITY;
@@ -136,6 +138,64 @@ export async function recordRoundActivity(
     expirationTtl: ROUND_STATE_TTL_SECONDS,
   });
   return { kind: "round-finalize", roundKey, generation };
+}
+
+export async function registerRoundImage(
+  job: ImageJob,
+  state: StateStore,
+  now = Date.now(),
+  generation = crypto.randomUUID(),
+): Promise<RoundFinalizeJob | null> {
+  const roundKey = receiptRoundKey(job);
+  if (!roundKey) return null;
+
+  const current = parseRoundState(await state.get(roundKey));
+  if (
+    (current?.completedAt !== undefined &&
+      now - current.completedAt < ROUND_COMPLETED_SUPPRESSION_SECONDS * 1000) ||
+    current?.stockCompletedAt !== undefined ||
+    (current && passClaimIsActive(current, now))
+  ) {
+    return null;
+  }
+
+  const active = current && current.completedAt === undefined ? current : null;
+  const pendingMessageIds = active?.pendingMessageIds?.includes(job.messageId)
+    ? active.pendingMessageIds
+    : [...(active?.pendingMessageIds ?? []), job.messageId];
+  const isNewer = !active?.latestJob ||
+    (job.timestamp ?? now) >= (active.latestJob.timestamp ?? active.updatedAt);
+  const nextGeneration = isNewer ? generation : active!.generation;
+  await state.put(roundKey, JSON.stringify({
+    ...active,
+    generation: nextGeneration,
+    updatedAt: Math.max(active?.updatedAt ?? Number.NEGATIVE_INFINITY, now),
+    processedMessageIds: active?.processedMessageIds ?? [],
+    pendingMessageIds,
+    latestJob: isNewer ? job : active!.latestJob,
+  } satisfies ReceiptRoundState), {
+    expirationTtl: ROUND_STATE_TTL_SECONDS,
+  });
+  return { kind: "round-finalize", roundKey, generation: nextGeneration };
+}
+
+export async function completeRoundImage(
+  job: ImageJob,
+  state: StateStore,
+): Promise<void> {
+  const roundKey = receiptRoundKey(job);
+  if (!roundKey) return;
+  const current = parseRoundState(await state.get(roundKey));
+  if (!current || current.completedAt !== undefined || current.stockCompletedAt !== undefined) {
+    return;
+  }
+  if (!current.pendingMessageIds?.includes(job.messageId)) return;
+  await state.put(roundKey, JSON.stringify({
+    ...current,
+    pendingMessageIds: current.pendingMessageIds.filter((id) => id !== job.messageId),
+  } satisfies ReceiptRoundState), {
+    expirationTtl: ROUND_STATE_TTL_SECONDS,
+  });
 }
 
 export async function claimRoundPass(
@@ -398,6 +458,7 @@ export async function finalizeRound(
   if (
     !current ||
     current.completedAt !== undefined ||
+    current.stockCompletedAt !== undefined ||
     current.generation !== job.generation
   ) {
     return { status: "stale" };
@@ -421,10 +482,12 @@ export async function finalizeRound(
 
   const elapsedMs = now - current.updatedAt;
   const inactivityMs = ROUND_INACTIVITY_SECONDS * 1000;
-  if (elapsedMs < inactivityMs) {
+  if (current.pendingMessageIds?.length || elapsedMs < inactivityMs) {
     return {
       status: "waiting",
-      retryAfterSeconds: Math.max(1, Math.ceil((inactivityMs - elapsedMs) / 1000)),
+      retryAfterSeconds: current.pendingMessageIds?.length
+        ? 1
+        : Math.max(1, Math.ceil((inactivityMs - elapsedMs) / 1000)),
     };
   }
 

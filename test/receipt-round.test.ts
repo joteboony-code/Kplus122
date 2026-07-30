@@ -7,8 +7,10 @@ import {
   completeRoundAfterFailure,
   completeRoundFinalization,
   completeRoundAfterPass,
+  completeRoundImage,
   completeRoundStock,
   finalizeRound,
+  registerRoundImage,
   receiptRoundKey,
   recordRoundActivity,
   releaseRoundFinalization,
@@ -125,6 +127,29 @@ describe("receipt round state", () => {
     ).toEqual({
       status: "finalized",
       evidence: undefined,
+      job: lastImage,
+    });
+  });
+
+  it("waits for every received image before finalizing one Stock reply", async () => {
+    const state = memoryState();
+    const firstImage = { ...job("first"), timestamp: 1_000 };
+    const lastImage = { ...job("last"), timestamp: 5_000 };
+    await registerRoundImage(firstImage, state, firstImage.timestamp, "first");
+    const finalizer = await registerRoundImage(lastImage, state, lastImage.timestamp, "last");
+
+    expect(await finalizeRound(finalizer!, state, 25_000)).toEqual({
+      status: "waiting",
+      retryAfterSeconds: 1,
+    });
+    await completeRoundImage(firstImage, state);
+    expect(await finalizeRound(finalizer!, state, 25_000)).toEqual({
+      status: "waiting",
+      retryAfterSeconds: 1,
+    });
+    await completeRoundImage(lastImage, state);
+    expect(await finalizeRound(finalizer!, state, 25_000)).toMatchObject({
+      status: "finalized",
       job: lastImage,
     });
   });
@@ -324,6 +349,28 @@ describe("receipt round state", () => {
     expect(await claimRoundStock(first, state, 10_000)).toBe("acquired");
     await completeRoundStock(first, state, 10_001);
     expect(await claimRoundStock(later, state, 10 * 60 * 1000)).toBe("suppressed");
+  });
+
+  it("does not reopen a Stock-completed Tid when a later image finishes", async () => {
+    const state = memoryState();
+    const first = { ...job("stock-first"), referenceCode: "62777124" };
+    const later = { ...job("stock-later"), referenceCode: "62777124" };
+
+    expect(await claimRoundStock(first, state, 10_000)).toBe("acquired");
+    await completeRoundStock(first, state, 10_001);
+    expect(await recordRoundActivity(
+      later,
+      undefined,
+      state,
+      10_002,
+      "late-image",
+    )).toBeNull();
+    expect(await registerRoundImage(
+      later,
+      state,
+      10_002,
+      "late-image",
+    )).toBeNull();
   });
 
   it("allows Stock Flex again after the technician sends a new Tid", async () => {
