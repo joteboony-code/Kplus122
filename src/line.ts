@@ -179,7 +179,13 @@ export function imageJobFromEvent(event: LineWebhookEvent): ImageJob | null {
 
 export function referenceCodeFromEvent(event: LineWebhookEvent): string | null {
   if (event.type !== "message" || event.message?.type !== "text") return null;
-  const match = event.message.text?.match(/^\s*(\d{8})\s*$/);
+  const normalized = String(event.message.text ?? "")
+    .normalize("NFKC")
+    .replace(/[\u0E50-\u0E59]/g, (digit) =>
+      String(digit.charCodeAt(0) - 0x0E50)
+    )
+    .replace(/[\p{Cf}\uFE0E\uFE0F]/gu, "");
+  const match = normalized.match(/(?:^|[^0-9])([0-9]{8})(?![0-9])/);
   return match?.[1] ?? null;
 }
 
@@ -386,8 +392,11 @@ export async function sendInspectionResultWithMethod(
   additionalMessages: Record<string, unknown>[] = [],
   includeStockFlex = true,
 ): Promise<"reply" | null> {
+  const tid = /^\d{8}$/.test(job.referenceCode ?? "")
+    ? job.referenceCode
+    : "ไม่ระบุ";
   const messages = [
-    inspectionMessage(job, text) as Record<string, unknown>,
+    inspectionMessage(job, `TID: ${tid}\n${text}`) as Record<string, unknown>,
     ...additionalMessages,
     ...(includeStockFlex ? [stockFlexMessage(job.referenceCode)] : []),
   ];

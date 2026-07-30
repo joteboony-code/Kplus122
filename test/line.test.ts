@@ -71,7 +71,7 @@ describe("LINE webhook", () => {
     expect(imageJobFromEvent({ type: "message", message: { type: "text" } })).toBeNull();
   });
 
-  it("accepts only an exact 8-digit job reference and scopes it by conversation and sender", () => {
+  it("finds an isolated 8-digit job reference in text and scopes it by conversation and sender", () => {
     const event = {
       type: "message",
       source: { type: "group" as const, groupId: "group-1", userId: "user-1" },
@@ -84,11 +84,19 @@ describe("LINE webhook", () => {
     });
     expect(referenceCodeFromEvent({
       ...event,
-      message: { type: "text", text: "งาน 12345678" },
-    })).toBeNull();
+      message: { type: "text", text: "ดำเนินการเรียบร้อย 88888888 ทำแบบสอบถาม" },
+    })).toBe("88888888");
+    expect(referenceCodeFromEvent({
+      ...event,
+      message: { type: "text", text: "TID ๑๒๓๔๕๖๗๘" },
+    })).toBe("12345678");
     expect(referenceCodeFromEvent({
       ...event,
       message: { type: "text", text: "1234567" },
+    })).toBeNull();
+    expect(referenceCodeFromEvent({
+      ...event,
+      message: { type: "text", text: "123456789" },
     })).toBeNull();
   });
 
@@ -168,7 +176,7 @@ describe("LINE webhook", () => {
     expect(payload.messages[0]).toMatchObject({
       type: "textV2",
       quoteToken: "image-quote-token",
-      text: "{sender}\nผลตรวจ",
+      text: "{sender}\nTID: ไม่ระบุ\nผลตรวจ",
       substitution: {
         sender: { mentionee: { userId: "U123" } },
       },
@@ -194,7 +202,7 @@ describe("LINE webhook", () => {
     };
     expect(payload.messages[0]).toMatchObject({
       type: "text",
-      text: "ผลตรวจ",
+      text: "TID: ไม่ระบุ\nผลตรวจ",
     });
     expect(payload.messages[0]).not.toHaveProperty("quickReply");
     expect(payload.messages[1]).toMatchObject({
@@ -314,6 +322,7 @@ describe("LINE webhook", () => {
       replyTarget: "group-1",
       sourceType: "group" as const,
       senderUserId: "U123",
+      referenceCode: "28253214",
     };
 
     expect(await sendInspectionResultWithMethod(
@@ -328,6 +337,9 @@ describe("LINE webhook", () => {
     };
     expect(payload.messages).toHaveLength(2);
     expect(payload.messages[0]).toMatchObject({ type: "textV2" });
+    expect(payload.messages[0]).toMatchObject({
+      text: expect.stringContaining("TID: 28253214"),
+    });
     expect(payload.messages[0]).not.toHaveProperty("quickReply");
     expect(payload.messages[1]).toMatchObject({
       type: "flex",
@@ -406,7 +418,7 @@ describe("LINE webhook", () => {
     expect(payload.messages).toHaveLength(4);
     expect(payload.messages[0]).toMatchObject({
       type: "textV2",
-      text: "{sender}\nผลตรวจ",
+      text: "{sender}\nTID: ไม่ระบุ\nผลตรวจ",
     });
     expect(payload.messages[0]).not.toHaveProperty("quickReply");
     expect(payload.messages[1]).not.toHaveProperty("quickReply");
