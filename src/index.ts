@@ -55,6 +55,13 @@ export { ReceiptRoundCoordinator } from "./receipt-round-coordinator";
 export { OperationalCounterCoordinator } from "./operational-counters";
 import { d1StateStore, purgeExpiredState } from "./state-store";
 import {
+  DEFAULT_PADDLEOCR_MODEL,
+  MAX_PADDLEOCR_POLLS,
+  PADDLEOCR_POLL_DELAY_SECONDS,
+  pollPaddleOcr,
+  submitPaddleOcr,
+} from "./paddle-ocr";
+import {
   fetchCastleServiceSnapshot,
   formatServiceLookMessages,
   loadTechnicianNotifiedServiceJobKeys,
@@ -67,9 +74,15 @@ import {
 } from "./service-look";
 import { listServiceAreaMentions } from "./service-technicians";
 import {
+  isLineWebhookQueueJob,
+  isOcrFallbackJob,
+  isPaddlePollJob,
   isRoundFinalizeJob,
   type ImageJob,
+  type LineWebhookEvent,
   type LineWebhookBody,
+  type OcrFallbackJob,
+  type PaddlePollJob,
   type QueueJob,
   type RoundFinalizeJob,
 } from "./types";
@@ -538,7 +551,7 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
   }
 
   const operationalState = d1StateStore(env.CONTROL_DB);
-  const jobs: ImageJob[] = [];
+  const imageEvents: LineWebhookEvent[] = [];
   for (const event of payload.events ?? []) {
     const serviceLookContext = serviceLookContextFromEvent(event);
     if (serviceLookContext) {
@@ -563,18 +576,24 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
       continue;
     }
 
-    const job = imageJobFromEvent(event);
-    if (!job) continue;
-    if (scope) {
-      job.referenceCode = await getJobReference(
-        scope.conversationId,
-        scope.senderId,
-        operationalState,
-      );
-    }
-    jobs.push(job);
+    if (imageJobFromEvent(event)) imageEvents.push(event);
   }
 
+  if (imageEvents.length > 0) {
+    await env.LINE_WEBHOOKS.send({
+      kind: "line-webhook",
+      events: imageEvents,
+      receivedAtMs: Date.now(),
+    });
+  }
+
+  return Response.json({ accepted: imageEvents.length });
+}
+
+async function processQueuedWebhookEvents(
+  events: LineWebhookEvent[],
+  env: Env,
+): Promise<void> {
   if (!(await isProcessingEnabled(
     env.CONTROL_DB,
     String(env.PROCESSING_FORCE_DISABLED) === "true",
@@ -582,25 +601,38 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
     console.log(JSON.stringify({
       event: "webhook_images_skipped",
       reason: "processing-disabled",
-      imageCount: jobs.length,
+      imageCount: events.length,
     }));
-    return Response.json({ accepted: 0, processingEnabled: false });
+    return;
   }
 
-  if (jobs.length > 0) {
-    for (const job of jobs) {
-      await registerStockRoundImage(job, env);
+  const operationalState = d1StateStore(env.CONTROL_DB);
+  const jobs: ImageJob[] = [];
+  for (const event of events) {
+    const job = imageJobFromEvent(event);
+    if (!job) continue;
+    const scope = conversationAndSenderFromEvent(event);
+    if (scope) {
+      job.referenceCode = await getJobReference(
+        scope.conversationId,
+        scope.senderId,
+        operationalState,
+      );
     }
+    await registerStockRoundImage(job, env);
+    jobs.push(job);
+  }
+  if (jobs.length > 0) {
     await env.IMAGE_QUEUE.sendBatch(jobs.map((body) => ({ body })));
   }
-
-  return Response.json({ accepted: jobs.length });
 }
 
 async function processImageJob(
   job: ImageJob,
   env: Env,
   trace: InspectionTrace,
+  skipOcrSpace = false,
+  downloadedImage?: Uint8Array,
 ): Promise<ProcessResult> {
   const expectedSale = numericSetting(env.EXPECTED_SALE_AMOUNT, "EXPECTED_SALE_AMOUNT");
   const expectedVoid = numericSetting(env.EXPECTED_VOID_AMOUNT, "EXPECTED_VOID_AMOUNT");
@@ -616,8 +648,10 @@ async function processImageJob(
     return IGNORED_RESULT;
   }
 
-  const original = await downloadLineImage(job.messageId, env.LINE_CHANNEL_ACCESS_TOKEN);
+  const original = downloadedImage ??
+    await downloadLineImage(job.messageId, env.LINE_CHANNEL_ACCESS_TOKEN);
 
+  if (!skipOcrSpace) {
   const ocrSpaceReservation = env.OCR_SPACE_API_KEY
     ? await reserveOcrSpaceRequest(env.OPERATIONAL_COUNTERS)
     : null;
@@ -726,6 +760,7 @@ async function processImageJob(
       webhookEventId: job.webhookEventId,
       reason: env.OCR_SPACE_API_KEY ? "daily-limit" : "api-key-missing",
     }));
+  }
   }
 
   let workerText: string;
@@ -933,6 +968,217 @@ async function processImageJob(
   };
 }
 
+function paddleStateKey(job: ImageJob): string {
+  return `paddle-job:${job.webhookEventId}:${job.messageId}`;
+}
+
+async function enqueueOcrFallback(
+  job: ImageJob,
+  reason: string,
+  env: Env,
+): Promise<void> {
+  await env.OCR_FALLBACK_QUEUE.send({
+    kind: "ocr-fallback",
+    job,
+    reason: reason.slice(0, 500),
+  });
+  console.warn(JSON.stringify({
+    event: "paddleocr_fallback_enqueued",
+    messageId: job.messageId,
+    reason,
+  }));
+}
+
+async function submitPaddleJob(job: ImageJob, env: Env): Promise<void> {
+  const token = env.PADDLEOCR_TOKEN?.trim();
+  if (!token) {
+    await enqueueOcrFallback(job, "PADDLEOCR_TOKEN is not configured", env);
+    return;
+  }
+
+  const store = d1StateStore(env.CONTROL_DB);
+  const key = paddleStateKey(job);
+  let jobId = await store.get(key);
+  try {
+    if (!jobId) {
+      const image = await downloadLineImage(
+        job.messageId,
+        env.LINE_CHANNEL_ACCESS_TOKEN,
+      );
+      jobId = await submitPaddleOcr(
+        image,
+        token,
+        env.PADDLEOCR_MODEL?.trim() || DEFAULT_PADDLEOCR_MODEL,
+      );
+      await store.put(key, jobId, { expirationTtl: 24 * 60 * 60 });
+      console.log(JSON.stringify({
+        event: "paddleocr_submitted",
+        messageId: job.messageId,
+        paddleJobId: jobId,
+      }));
+    }
+    await env.IMAGE_QUEUE.send({
+      kind: "paddle-poll",
+      job,
+      paddleJobId: jobId,
+      pollCount: 0,
+    }, { delaySeconds: PADDLEOCR_POLL_DELAY_SECONDS });
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : "unknown error";
+    await enqueueOcrFallback(job, `PaddleOCR submit failed: ${detail}`, env);
+  }
+}
+
+async function processPaddleText(
+  job: ImageJob,
+  text: string,
+  env: Env,
+  trace: InspectionTrace,
+): Promise<ProcessResult> {
+  const expectedSale = numericSetting(env.EXPECTED_SALE_AMOUNT, "EXPECTED_SALE_AMOUNT");
+  const expectedVoid = numericSetting(env.EXPECTED_VOID_AMOUNT, "EXPECTED_VOID_AMOUNT");
+  const minConfidence = numericSetting(env.MIN_CONFIDENCE, "MIN_CONFIDENCE");
+  const inspection = acceptWorkerPaymentName(
+    inspectConfirmedReceiptText(text),
+    text,
+  );
+  const decision = decideReceipt(
+    inspection,
+    expectedSale,
+    expectedVoid,
+    minConfidence,
+  );
+  const route = routeOcrSpaceDecision(decision, inspection);
+  updateTraceFromInspection(trace, inspection, "paddleocr");
+  trace.providers.push("paddleocr");
+
+  if (route === "pass") {
+    const matchedAmount = inspection.observedAmounts.find(
+      (amount) =>
+        Math.abs(amount - expectedSale) < 0.005 ||
+        Math.abs(amount - expectedVoid) < 0.005,
+    ) ?? expectedSale;
+    return replyKplusSuccess(job, matchedAmount, "paddleocr", env, trace);
+  }
+  if (route === "ignore") {
+    console.log(JSON.stringify({
+      event: "image_ignored",
+      webhookEventId: job.webhookEventId,
+      stage: "paddleocr-filter",
+    }));
+    return IGNORED_RESULT;
+  }
+
+  const image = await downloadLineImage(
+    job.messageId,
+    env.LINE_CHANNEL_ACCESS_TOKEN,
+  );
+  return processImageJob(job, env, trace, true, image);
+}
+
+async function finalizeImageResult(
+  job: ImageJob,
+  initialResult: ProcessResult,
+  env: Env,
+  trace: InspectionTrace,
+  startedAt: number,
+): Promise<void> {
+  let result = initialResult;
+  if (result.outcome !== "pass" && result.evidence) {
+    const delivery = await replyKplusFailure(
+      job,
+      result.evidence.text,
+      env,
+      trace,
+    );
+    if (delivery === "suppressed") {
+      trace.stage = "round-failure-suppression";
+      trace.lineDeliveryStatus = "not_applicable";
+      result = IGNORED_RESULT;
+    }
+  }
+  if (result.outcome === "ignored") await completeStockRoundImage(job, env);
+  trace.lineDeliveryStatus ??= result.evidence ? "pending" : "not_applicable";
+  try {
+    await markImageProcessed(job, d1StateStore(env.CONTROL_DB));
+  } catch (error) {
+    console.error(JSON.stringify({
+      event: "processed_image_marker_failed",
+      webhookEventId: job.webhookEventId,
+      messageId: job.messageId,
+      error: error instanceof Error ? error.message : "unknown error",
+    }));
+  }
+  try {
+    await d1StateStore(env.CONTROL_DB).delete(paddleStateKey(job));
+  } catch (error) {
+    console.warn(JSON.stringify({
+      event: "paddleocr_state_cleanup_failed",
+      messageId: job.messageId,
+      error: error instanceof Error ? error.message : "unknown error",
+    }));
+  }
+  await recordStat(env, "processed");
+  await recordStat(
+    env,
+    result.outcome === "pass"
+      ? "passed"
+      : result.outcome === "fail"
+        ? "failed"
+        : "ignored",
+  );
+  await recordAuditSafely(env, job, result.outcome, trace, startedAt);
+}
+
+async function processPaddlePoll(
+  data: PaddlePollJob,
+  env: Env,
+  trace: InspectionTrace,
+  startedAt: number,
+): Promise<"pending" | "finalized" | "fallback"> {
+  const token = env.PADDLEOCR_TOKEN?.trim();
+  if (!token) {
+    await enqueueOcrFallback(data.job, "PADDLEOCR_TOKEN is not configured", env);
+    return "fallback";
+  }
+  let status: Awaited<ReturnType<typeof pollPaddleOcr>>;
+  try {
+    status = await timedProvider(
+      trace,
+      "paddleocr-poll",
+      () => pollPaddleOcr(data.paddleJobId, token),
+    );
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : "unknown error";
+    await enqueueOcrFallback(data.job, `PaddleOCR failed: ${detail}`, env);
+    return "fallback";
+  }
+  if (status.state === "pending") {
+    const pollCount = data.pollCount + 1;
+    if (pollCount >= MAX_PADDLEOCR_POLLS) {
+      await enqueueOcrFallback(
+        data.job,
+        `PaddleOCR timed out after ${pollCount} polls`,
+        env,
+      );
+      return "fallback";
+    }
+    await env.IMAGE_QUEUE.send({
+      ...data,
+      pollCount,
+    }, { delaySeconds: PADDLEOCR_POLL_DELAY_SECONDS });
+    return "pending";
+  }
+  const result = await processPaddleText(
+    data.job,
+    status.text!,
+    env,
+    trace,
+  );
+  await finalizeImageResult(data.job, result, env, trace, startedAt);
+  return "finalized";
+}
+
 async function scheduleRoundFinalizer(
   finalizer: RoundFinalizeJob,
   env: Env,
@@ -1016,16 +1262,63 @@ export default {
 
   async queue(batch, env): Promise<void> {
     for (const message of batch.messages) {
-      if (isRoundFinalizeJob(message.body)) {
-        await processRoundFinalizer(message.body, env);
-        message.ack();
+      const body = message.body;
+      if (isLineWebhookQueueJob(body)) {
+        try {
+          await processQueuedWebhookEvents(body.events, env);
+          message.ack();
+        } catch (error) {
+          console.error(JSON.stringify({
+            event: "webhook_queue_failed",
+            receivedAtMs: body.receivedAtMs,
+            attempts: message.attempts,
+            error: error instanceof Error ? error.message : "unknown error",
+          }));
+          message.retry({ delaySeconds: 5 });
+        }
         continue;
       }
 
-      const job = message.body;
+      if (isRoundFinalizeJob(body)) {
+        try {
+          await processRoundFinalizer(body, env);
+          message.ack();
+        } catch (error) {
+          console.error(JSON.stringify({
+            event: "round_finalizer_failed",
+            roundKey: body.roundKey,
+            attempts: message.attempts,
+            error: error instanceof Error ? error.message : "unknown error",
+          }));
+          message.retry({ delaySeconds: 5 });
+        }
+        continue;
+      }
+
+      const job = isPaddlePollJob(body) || isOcrFallbackJob(body)
+        ? body.job
+        : body;
       const startedAt = Date.now();
       const trace: InspectionTrace = { providers: [], providerTimings: {} };
       try {
+        if (isPaddlePollJob(body)) {
+          await processPaddlePoll(body, env, trace, startedAt);
+          message.ack();
+          continue;
+        }
+
+        if (isOcrFallbackJob(body)) {
+          console.log(JSON.stringify({
+            event: "ocr_fallback_started",
+            messageId: job.messageId,
+            reason: body.reason,
+          }));
+          const result = await processImageJob(job, env, trace);
+          await finalizeImageResult(job, result, env, trace, startedAt);
+          message.ack();
+          continue;
+        }
+
         if (message.attempts === 1) await recordStat(env, "received");
 
         const operationalState = d1StateStore(env.CONTROL_DB);
@@ -1064,45 +1357,7 @@ export default {
           continue;
         }
 
-        let result = await processImageJob(job, env, trace);
-        if (result.outcome !== "pass" && result.evidence) {
-          const delivery = await replyKplusFailure(
-            job,
-            result.evidence.text,
-            env,
-            trace,
-          );
-          if (delivery === "suppressed") {
-            trace.stage = "round-failure-suppression";
-            trace.lineDeliveryStatus = "not_applicable";
-            result = IGNORED_RESULT;
-          }
-        }
-        if (result.outcome === "ignored") {
-          await completeStockRoundImage(job, env);
-        }
-        trace.lineDeliveryStatus ??=
-          result.evidence ? "pending" : "not_applicable";
-        try {
-          await markImageProcessed(job, operationalState);
-        } catch (error) {
-          console.error(JSON.stringify({
-            event: "processed_image_marker_failed",
-            webhookEventId: job.webhookEventId,
-            messageId: job.messageId,
-            error: error instanceof Error ? error.message : "unknown error",
-          }));
-        }
-        await recordStat(env, "processed");
-        await recordStat(
-          env,
-          result.outcome === "pass"
-            ? "passed"
-            : result.outcome === "fail"
-              ? "failed"
-              : "ignored",
-        );
-        await recordAuditSafely(env, job, result.outcome, trace, startedAt);
+        await submitPaddleJob(job, env);
         message.ack();
       } catch (error) {
         await recordStat(env, "errors");

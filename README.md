@@ -8,6 +8,15 @@ Webhook URL ที่ใช้กับ LINE:
 https://kplus122-webhook.joteboony.workers.dev/webhook
 ```
 
+## OCR architecture (2026-07-30)
+
+- Webhook รูปจะบันทึกลง `kplus122-line-webhooks` แล้วตอบ `200 OK` โดยเร็ว
+- PaddleOCR เป็นตัวตรวจหลักผ่าน `kplus122-images` สูงสุด 5 งานพร้อมกัน
+- เมื่อ PaddleOCR ใช้งานไม่ได้ ระบบจะส่งงานไป OCR.space ผ่าน
+  `kplus122-ocr-fallback` ซึ่งจำกัดไว้ 2 งานพร้อมกัน
+- Workers AI และ Google Vision ยังคงเป็นขั้นตรวจเสริมตามเงื่อนไขเดิม
+- การแจ้งผล LINE ใช้ Reply API เท่านั้น ไม่มี Push fallback
+
 Cloudflare Worker สำหรับรับรูปจาก LINE Messaging API และตรวจเฉพาะสลิป KPLUS โดยใช้ `message.imageSet.id` ของชุดรูป 10+ ภาพจาก LINE เป็นรหัสรอบโดยตรง
 
 1. สลิป `KPLUS`/`K+` ต้องมี `SETTLEMENT` และยอดอย่างใดอย่างหนึ่งดังนี้:
@@ -61,7 +70,9 @@ npm run check
 
 ```powershell
 npx wrangler login
+npx wrangler queues create kplus122-line-webhooks
 npx wrangler queues create kplus122-images
+npx wrangler queues create kplus122-ocr-fallback
 ```
 
 ## 4. ตั้ง Secret
@@ -72,6 +83,7 @@ npx wrangler queues create kplus122-images
 npx wrangler secret put LINE_CHANNEL_SECRET
 npx wrangler secret put LINE_CHANNEL_ACCESS_TOKEN
 npx wrangler secret put CONTROL_PASSWORD
+npx wrangler secret put PADDLEOCR_TOKEN
 npx wrangler secret put OCR_SPACE_API_KEY
 npx wrangler secret put GOOGLE_VISION_API_KEY
 ```

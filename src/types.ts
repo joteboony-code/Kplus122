@@ -58,10 +58,46 @@ export interface RoundFinalizeJob {
   generation: string;
 }
 
-export type QueueJob = ImageJob | RoundFinalizeJob;
+export interface LineWebhookQueueJob {
+  kind: "line-webhook";
+  events: LineWebhookEvent[];
+  receivedAtMs: number;
+}
+
+export interface PaddlePollJob {
+  kind: "paddle-poll";
+  job: ImageJob;
+  paddleJobId: string;
+  pollCount: number;
+}
+
+export interface OcrFallbackJob {
+  kind: "ocr-fallback";
+  job: ImageJob;
+  reason: string;
+}
+
+export type QueueJob =
+  | ImageJob
+  | RoundFinalizeJob
+  | LineWebhookQueueJob
+  | PaddlePollJob
+  | OcrFallbackJob;
 
 export function isRoundFinalizeJob(job: QueueJob): job is RoundFinalizeJob {
   return "kind" in job && job.kind === "round-finalize";
+}
+
+export function isLineWebhookQueueJob(job: QueueJob): job is LineWebhookQueueJob {
+  return "kind" in job && job.kind === "line-webhook";
+}
+
+export function isPaddlePollJob(job: QueueJob): job is PaddlePollJob {
+  return "kind" in job && job.kind === "paddle-poll";
+}
+
+export function isOcrFallbackJob(job: QueueJob): job is OcrFallbackJob {
+  return "kind" in job && job.kind === "ocr-fallback";
 }
 
 export interface ReceiptInspection {
