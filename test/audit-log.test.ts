@@ -1,7 +1,47 @@
 import { describe, expect, it } from "vitest";
-import { updateLineDeliveryStatus } from "../src/audit-log";
+import { recordInspectionLog, updateLineDeliveryStatus } from "../src/audit-log";
 
 describe("inspection audit log", () => {
+  it("stores a bounded PaddleOCR text result for the control page", async () => {
+    const prepared: Array<{ sql: string; parameters: unknown[] }> = [];
+    const db = {
+      prepare: (sql: string) => {
+        const entry = { sql, parameters: [] as unknown[] };
+        prepared.push(entry);
+        const statement = {
+          bind: (...parameters: unknown[]) => {
+            entry.parameters = parameters;
+            return statement;
+          },
+        };
+        return statement;
+      },
+      batch: async () => [],
+    } as unknown as D1Database;
+    const paddleText = `KPLUS\nSETTLEMENT\n${"1".repeat(5_000)}`;
+
+    await recordInspectionLog(
+      db,
+      {
+        webhookEventId: "event-1",
+        messageId: "message-1",
+        replyToken: "reply-1",
+        referenceCode: "12345678",
+      },
+      "pass",
+      {
+        providers: ["paddleocr"],
+        providerTimings: { "paddleocr-poll": 420 },
+        paddleOcrText: paddleText,
+      },
+      Date.now(),
+    );
+
+    expect(prepared[0].sql).toContain("paddle_ocr_text");
+    expect(prepared[0].parameters).toContain(paddleText.slice(0, 4_000));
+    expect(prepared[0].parameters).not.toContain(paddleText);
+  });
+
   it("updates the LINE delivery status for the source image", async () => {
     let sql = "";
     let parameters: unknown[] = [];

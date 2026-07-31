@@ -50,9 +50,10 @@ function controlDbWithLog(): D1Database {
             user_id: "user-1",
             reference_code: "28038457",
             outcome: "pass",
-            stage: "ocr-space",
-            provider_chain: "ocr-space",
-            provider_timings: '{"ocr-space":1220}',
+            stage: "paddleocr",
+            provider_chain: "paddleocr-poll > paddleocr",
+            provider_timings: '{"paddleocr-poll":1220}',
+            paddle_ocr_text: "KPLUS\nSETTLEMENT\nAMT THB 1.22\n<script>alert(1)</script>",
             observed_amounts: "[1.22,-1.22]",
             has_kplus: 1,
             has_settlement: 1,
@@ -92,6 +93,7 @@ describe("processing control", () => {
       CONTROL_PASSWORD: "strong-test-password",
       CONTROL_DB: memoryControlDb(),
       OPERATIONAL_COUNTERS: workerEnv.OPERATIONAL_COUNTERS,
+      PADDLEOCR_TOKEN: "paddle-test-token",
       OCR_SPACE_API_KEY: "ocr-test-key",
       GOOGLE_VISION_API_KEY: "vision-test-key",
       CF_VERSION_METADATA: {
@@ -146,11 +148,12 @@ describe("processing control", () => {
     const page = await control?.text();
     expect(page).toContain("กำลังทำงาน");
     expect(page).toContain("OCR.space");
+    expect(page).toContain("PaddleOCR");
     expect(page).toContain("0 / 500 รูป");
     expect(page).toContain("Workers AI");
     expect(page).toContain("Google Vision");
     expect(page).toContain("SETTLEMENT");
-    expect(page).toContain("ตรวจพร้อมกันสูงสุด 2 รูป");
+    expect(page).toContain("Paddle 5 งาน · OCR.space 2 งาน");
     expect(page).toContain("รับเลขงาน 8 หลักก่อนรูป");
     expect(page).toContain("Log การตรวจล่าสุด 50 รูป");
     expect(page).toContain("0 / 1000 units");
@@ -242,6 +245,11 @@ describe("processing control", () => {
     expect(page).toContain('class="amount-value">1.22,-1.22');
     expect(page).toContain('class="job-value">28038457');
     expect(page).toContain('class="delivery-chip sent">Reply สำเร็จ');
+    expect(page).toContain("ผลข้อความจาก PaddleOCR");
+    expect(page).toContain("AMT THB 1.22");
+    expect(page).toContain("&lt;script&gt;alert(1)&lt;/script&gt;");
+    expect(page).not.toContain("<script>alert(1)</script>");
+    expect(page).toContain("PaddleOCR</span>");
   });
 
   it("asks for confirmation before clearing inspection logs", async () => {

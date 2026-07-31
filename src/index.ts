@@ -1035,6 +1035,7 @@ async function processPaddleText(
   env: Env,
   trace: InspectionTrace,
 ): Promise<ProcessResult> {
+  trace.paddleOcrText = text;
   const expectedSale = numericSetting(env.EXPECTED_SALE_AMOUNT, "EXPECTED_SALE_AMOUNT");
   const expectedVoid = numericSetting(env.EXPECTED_VOID_AMOUNT, "EXPECTED_VOID_AMOUNT");
   const minConfidence = numericSetting(env.MIN_CONFIDENCE, "MIN_CONFIDENCE");

@@ -192,6 +192,7 @@ function confirmPage(target: "disable" | "clear-logs"): string {
 }
 
 interface ProviderStatus {
+  paddleOcrConfigured: boolean;
   ocrSpaceConfigured: boolean;
   ocrSpaceUsage: number;
   googleVisionConfigured: boolean;
@@ -288,6 +289,7 @@ function bangkokTime(value: Date): string {
 function serviceAlerts(enabled: boolean, providers: ProviderStatus): string {
   const alerts: string[] = [];
   if (!enabled) alerts.push("ระบบตรวจรูปกำลังหยุดทำงาน");
+  if (!providers.paddleOcrConfigured) alerts.push("PaddleOCR ยังไม่ได้ตั้งค่า access token");
   if (!providers.ocrSpaceConfigured) alerts.push("OCR.space ยังไม่ได้ตั้งค่า API key");
   if (providers.ocrSpaceUsage >= OCR_SPACE_DAILY_LIMIT) {
     alerts.push("OCR.space ครบโควตาวันนี้ ระบบจะใช้ Workers AI แทน");
@@ -357,7 +359,7 @@ function logCards(logs: InspectionLogRow[]): string {
             : "Reply สำเร็จ",
         }
       : log.line_delivery_status === "pending"
-        ? { css: "pending", text: "รอส่ง Push" }
+        ? { css: "pending", text: "รอส่ง Reply" }
         : log.line_delivery_status === "failed"
           ? { css: "failed", text: "ส่งไม่สำเร็จ" }
           : { css: "none", text: "ไม่ต้องส่ง" };
@@ -372,6 +374,14 @@ function logCards(logs: InspectionLogRow[]): string {
         timing = log.provider_timings;
       }
     }
+    const usedPaddle = (log.provider_chain ?? "").includes("paddleocr");
+    const paddleResult = usedPaddle
+      ? `<section class="paddle-result"><b>ผลข้อความจาก PaddleOCR</b>${
+          log.paddle_ocr_text?.trim()
+            ? `<pre>${escapeHtml(log.paddle_ocr_text)}</pre>`
+            : '<p>รายการนี้ไม่มีข้อความ PaddleOCR ที่บันทึกไว้</p>'
+        }</section>`
+      : "";
     return `<article class="log-row ${escapeHtml(log.outcome)}">
       <div class="log-main">
         <b class="outcome-badge"><i>${outcomeIcon}</i>${outcomeLabel}</b>
@@ -380,11 +390,12 @@ function logCards(logs: InspectionLogRow[]): string {
         <div class="evidence-row" aria-label="หลักฐานที่ตรวจพบ">
         <span class="evidence-chip ${kplusState.css}"><i>${kplusState.css === "found" ? "✓" : kplusState.css === "missing" ? "✕" : "?"}</i>${kplusState.text}</span>
         <span class="evidence-chip ${settlementState.css}"><i>${settlementState.css === "found" ? "✓" : settlementState.css === "missing" ? "✕" : "?"}</i>${settlementState.text}</span>
+        ${usedPaddle ? '<span class="evidence-chip provider"><i>P</i>PaddleOCR</span>' : ""}
         </div>
         <span class="delivery-chip ${deliveryState.css}">${deliveryState.text}</span>
         <div class="log-meta"><time>${escapeHtml(time)}</time><span>${log.processing_ms}ms${log.queue_delay_ms === null ? "" : ` · รอคิว ${log.queue_delay_ms}ms`}</span></div>
       </div>
-      <details class="log-more"><summary>รายละเอียด</summary><div>เส้นทาง: ${escapeHtml(log.provider_chain ?? "ไม่เรียก OCR")} · ขั้นตอน: ${escapeHtml(log.stage ?? "-")}${timing ? ` · ${escapeHtml(timing)}` : ""}${log.error ? ` · ${escapeHtml(log.error)}` : ""}</div></details>
+      <details class="log-more"><summary>รายละเอียด</summary><div>เส้นทาง: ${escapeHtml(log.provider_chain ?? "ไม่เรียก OCR")} · ขั้นตอน: ${escapeHtml(log.stage ?? "-")}${timing ? ` · ${escapeHtml(timing)}` : ""}${log.error ? ` · ${escapeHtml(log.error)}` : ""}</div>${paddleResult}</details>
     </article>`;
   }).join("");
 }
@@ -453,15 +464,15 @@ function controlPage(enabled: boolean, providers: ProviderStatus): string {
     .eyebrow{display:flex;gap:9px;align-items:center;color:#9eb8aa;font-weight:700;font-size:14px}.dot{width:11px;height:11px;border-radius:50%;background:${enabled ? "#30dc78" : "#ee6474"};box-shadow:0 0 18px ${enabled ? "#30dc78" : "#ee6474"}}
     h1{font-size:clamp(35px,8vw,58px);letter-spacing:-.04em;margin:18px 0 12px;color:${enabled ? "#dffff0" : "#ffe8eb"}}.detail{max-width:540px;margin:0;color:#a8c0b2;line-height:1.7;font-size:16px}
     .action{margin-top:30px}.action button{width:100%;padding:18px 22px;border:0;border-radius:15px;font-size:18px;font-weight:900;cursor:pointer;background:${enabled ? "#f06474" : "#31dc79"};color:${enabled ? "#2b090e" : "#06110b"}}.action button:hover{filter:brightness(1.08)}
-    .pipeline{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:20px}.step{position:relative;padding:15px;border:1px solid #294537;border-radius:14px;background:#0a1710}.step small{display:block;color:#718d7e;margin-bottom:5px}.step b{font-size:15px}.step em{display:block;margin-top:7px;color:#8ca799;font-size:12px;font-style:normal;line-height:1.45}.step:not(:last-child)::after{content:"›";position:absolute;right:-9px;top:50%;z-index:2;color:#35d87a;font-size:22px;transform:translateY(-50%)}
+    .pipeline{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:20px}.step{position:relative;padding:15px;border:1px solid #294537;border-radius:14px;background:#0a1710}.step small{display:block;color:#718d7e;margin-bottom:5px}.step b{font-size:15px}.step em{display:block;margin-top:7px;color:#8ca799;font-size:12px;font-style:normal;line-height:1.45}.step:not(:last-child)::after{content:"›";position:absolute;right:-9px;top:50%;z-index:2;color:#35d87a;font-size:22px;transform:translateY(-50%)}
     .section-title{margin:22px 0 10px;color:#a8c0b2;font-size:13px;font-weight:800;text-transform:uppercase;letter-spacing:.08em}.meta{display:grid;grid-template-columns:repeat(2,1fr);gap:12px;margin-top:12px}.item{padding:15px;border:1px solid #294537;border-radius:14px;background:#0a1710}.item small{display:block;color:#718d7e;margin-bottom:5px}.item b{font-size:15px}.item em{display:block;margin-top:7px;color:#8ca799;font-size:12px;font-style:normal;line-height:1.45}.item .ok{color:#5aeb94}.item .warn{color:#ffd477}.item .danger{color:#ff7888}
     .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}.stat{padding:13px;border:1px solid #294537;border-radius:13px;background:#0a1710}.stat small{display:block;color:#718d7e;font-size:11px}.stat strong{display:block;margin-top:5px;font-size:22px}.stat.wide{grid-column:span 2}.stat em{display:block;margin-top:5px;color:#8ca799;font-size:11px;font-style:normal;line-height:1.4}
     .meter{height:7px;margin-top:11px;border-radius:99px;background:#203429;overflow:hidden}.meter span{display:block;height:100%;width:${Math.min((providers.ocrSpaceUsage / OCR_SPACE_DAILY_LIMIT) * 100, 100)}%;background:${ocrSpaceRemaining > 0 ? "#30dc78" : "#f06474"}}
     .notice{margin-top:16px;padding:14px 16px;border-radius:13px;background:#172019;color:#91aa9c;font-size:13px;line-height:1.6;border:1px solid #293a30}
     .control-bar{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-bottom:15px;color:#8fa99a;font-size:11px}.control-bar .version{padding:5px 8px;border:1px solid #345342;border-radius:999px;background:#0b1811;color:#b8d2c3}.nav-actions{display:flex;gap:7px;margin-left:auto}.refresh{padding:7px 11px;border:1px solid #3a6a50;border-radius:9px;color:#7ef0aa;text-decoration:none;background:#10271a;font-weight:800}.manage{border-color:#437055;color:#d9ffe7}.service-health{margin:16px 0 0;padding:11px 13px;border-radius:12px;font-size:12px;line-height:1.5}.service-health.ok{border:1px solid #2f7350;background:#102b1c;color:#74eba2}.service-health.warning{border:1px solid #8a6230;background:#302413;color:#ffd58d}.service-health ul{margin:7px 0 0;padding-left:20px}
-    .logs{display:grid;gap:8px}.log-row,.log-empty{position:relative;overflow:hidden;padding:10px 12px;border:1px solid #294537;border-left:4px solid #536b5e;border-radius:11px;background:#0a1710}.log-row.pass{border-left-color:#36e77c;background:linear-gradient(90deg,#123522 0,#0a1710 28%)}.log-row.fail{border-left-color:#ff6478;background:linear-gradient(90deg,#35171d 0,#0a1710 28%)}.log-row.error{border-left-color:#ffad55;background:linear-gradient(90deg,#352515 0,#0a1710 28%)}.log-row.ignored{border-left-color:#71877b}.log-main{display:grid;grid-template-columns:88px 66px 72px minmax(165px,1fr) 96px 88px;gap:8px;align-items:center}.outcome-badge{display:inline-flex;align-items:center;gap:7px;font-size:14px;white-space:nowrap}.outcome-badge i,.evidence-chip i{display:grid;place-items:center;font-style:normal;font-weight:900}.outcome-badge i{width:22px;height:22px;border-radius:50%;background:#52695d;color:#fff}.pass .outcome-badge{color:#70f5a5}.pass .outcome-badge i{background:#2bc96c;color:#05200f}.fail .outcome-badge{color:#ff8c9a}.fail .outcome-badge i{background:#e05264}.error .outcome-badge{color:#ffc17e}.error .outcome-badge i{background:#ef9c45;color:#251406}.log-cell{font-size:12px;min-width:0}.log-cell small{display:block;color:#789486;font-size:9px;margin-bottom:1px}.job-value,.amount-value{display:block;overflow:hidden;text-overflow:ellipsis;font-size:13px;color:#f4fff8;letter-spacing:.02em;white-space:nowrap}.pass .amount-value{color:#70f5a5}.fail .amount-value{color:#ff9aa6}.evidence-row{display:flex;flex-wrap:wrap;gap:6px;margin:0;min-width:0}.evidence-chip{display:inline-flex;align-items:center;gap:4px;padding:4px 7px;border:1px solid #43574c;border-radius:999px;background:#142019;color:#9db1a6;font-size:10px;font-weight:800;white-space:nowrap}.evidence-chip i{width:14px;height:14px;border-radius:50%;font-size:9px}.evidence-chip.found{border-color:#2bc96c;background:#123a23;color:#79f5a8}.evidence-chip.found i{background:#2bc96c;color:#05200f}.evidence-chip.missing{border-color:#b84554;background:#38181e;color:#ff9aa7}.evidence-chip.missing i{background:#d84f61;color:#fff}.evidence-chip.unknown i{background:#52695d;color:#fff}.log-meta{display:grid;min-width:0;justify-items:end;color:#9ab2a5;font-size:9px;line-height:1.45;white-space:normal;text-align:right}.log-more{margin-top:5px;color:#789486;font-size:10px}.log-more summary{width:max-content;cursor:pointer;color:#8eaa9b}.log-more div{margin-top:5px;padding-top:5px;border-top:1px solid #294537;line-height:1.5;overflow-wrap:anywhere}.log-actions{display:flex;justify-content:space-between;align-items:center;margin:22px 0 10px}.log-actions .section-title{margin:0}.clear-logs button{border:1px solid #663b41;border-radius:9px;background:transparent;color:#ff9daa;padding:7px 10px;cursor:pointer}.log-empty{color:#789486;text-align:center}
+    .logs{display:grid;gap:8px}.log-row,.log-empty{position:relative;overflow:hidden;padding:10px 12px;border:1px solid #294537;border-left:4px solid #536b5e;border-radius:11px;background:#0a1710}.log-row.pass{border-left-color:#36e77c;background:linear-gradient(90deg,#123522 0,#0a1710 28%)}.log-row.fail{border-left-color:#ff6478;background:linear-gradient(90deg,#35171d 0,#0a1710 28%)}.log-row.error{border-left-color:#ffad55;background:linear-gradient(90deg,#352515 0,#0a1710 28%)}.log-row.ignored{border-left-color:#71877b}.log-main{display:grid;grid-template-columns:88px 66px 72px minmax(165px,1fr) 96px 88px;gap:8px;align-items:center}.outcome-badge{display:inline-flex;align-items:center;gap:7px;font-size:14px;white-space:nowrap}.outcome-badge i,.evidence-chip i{display:grid;place-items:center;font-style:normal;font-weight:900}.outcome-badge i{width:22px;height:22px;border-radius:50%;background:#52695d;color:#fff}.pass .outcome-badge{color:#70f5a5}.pass .outcome-badge i{background:#2bc96c;color:#05200f}.fail .outcome-badge{color:#ff8c9a}.fail .outcome-badge i{background:#e05264}.error .outcome-badge{color:#ffc17e}.error .outcome-badge i{background:#ef9c45;color:#251406}.log-cell{font-size:12px;min-width:0}.log-cell small{display:block;color:#789486;font-size:9px;margin-bottom:1px}.job-value,.amount-value{display:block;overflow:hidden;text-overflow:ellipsis;font-size:13px;color:#f4fff8;letter-spacing:.02em;white-space:nowrap}.pass .amount-value{color:#70f5a5}.fail .amount-value{color:#ff9aa6}.evidence-row{display:flex;flex-wrap:wrap;gap:6px;margin:0;min-width:0}.evidence-chip{display:inline-flex;align-items:center;gap:4px;padding:4px 7px;border:1px solid #43574c;border-radius:999px;background:#142019;color:#9db1a6;font-size:10px;font-weight:800;white-space:nowrap}.evidence-chip i{width:14px;height:14px;border-radius:50%;font-size:9px}.evidence-chip.found{border-color:#2bc96c;background:#123a23;color:#79f5a8}.evidence-chip.found i{background:#2bc96c;color:#05200f}.evidence-chip.missing{border-color:#b84554;background:#38181e;color:#ff9aa7}.evidence-chip.missing i{background:#d84f61;color:#fff}.evidence-chip.unknown i{background:#52695d;color:#fff}.evidence-chip.provider{border-color:#39745a;background:#102c1d;color:#9bf2bc}.evidence-chip.provider i{background:#39c976;color:#062513}.log-meta{display:grid;min-width:0;justify-items:end;color:#9ab2a5;font-size:9px;line-height:1.45;white-space:normal;text-align:right}.log-more{margin-top:5px;color:#789486;font-size:10px}.log-more summary{width:max-content;cursor:pointer;color:#8eaa9b}.log-more div{margin-top:5px;padding-top:5px;border-top:1px solid #294537;line-height:1.5;overflow-wrap:anywhere}.paddle-result{margin-top:8px;padding:9px;border:1px solid #315443;border-radius:10px;background:#08140d}.paddle-result b{display:block;color:#74eba2;font-size:11px}.paddle-result p{margin:7px 0 0;color:#789486}.paddle-result pre{max-height:240px;margin:7px 0 0;padding:9px;border-radius:8px;background:#050c08;color:#d9ffe7;font:11px/1.55 ui-monospace,SFMono-Regular,Consolas,monospace;white-space:pre-wrap;overflow:auto}.log-actions{display:flex;justify-content:space-between;align-items:center;margin:22px 0 10px}.log-actions .section-title{margin:0}.clear-logs button{border:1px solid #663b41;border-radius:9px;background:transparent;color:#ff9daa;padding:7px 10px;cursor:pointer}.log-empty{color:#789486;text-align:center}
     .delivery-chip{display:inline-flex;min-width:0;justify-content:center;overflow:hidden;text-overflow:ellipsis;padding:5px 7px;border:1px solid #42584c;border-radius:999px;font-size:9px;font-weight:900;white-space:nowrap}.delivery-chip.sent{border-color:#2bc96c;background:#123a23;color:#79f5a8}.delivery-chip.pending{border-color:#b88b39;background:#352a15;color:#ffd477}.delivery-chip.failed{border-color:#b84554;background:#38181e;color:#ff9aa7}.delivery-chip.none{color:#83988c;background:#142019}
-    @media(max-width:900px){.log-main{grid-template-columns:84px 68px 76px minmax(180px,1fr) 92px;column-gap:8px;row-gap:4px}.log-meta{grid-column:1/-1;display:flex;justify-content:flex-end;gap:8px}}
+    @media(max-width:900px){.pipeline{grid-template-columns:repeat(2,1fr)}.step:nth-child(2)::after{display:none}.log-main{grid-template-columns:84px 68px 76px minmax(180px,1fr) 92px;column-gap:8px;row-gap:4px}.log-meta{grid-column:1/-1;display:flex;justify-content:flex-end;gap:8px}}
     @media(max-width:650px){body{padding:15px}.shell{margin:12px auto}.panel{padding:25px}.pipeline,.meta{grid-template-columns:1fr}.stats{grid-template-columns:repeat(2,1fr)}.step:not(:last-child)::after{content:"↓";right:50%;top:auto;bottom:-18px;transform:translateX(50%)}.brand span{display:none}.log-main{grid-template-columns:1fr 1fr;gap:8px}.evidence-row{grid-column:1/-1}.log-meta{display:grid;justify-items:start;text-align:left}}
   </style>
 </head>
@@ -469,7 +480,7 @@ function controlPage(enabled: boolean, providers: ProviderStatus): string {
   <section class="panel"><div class="control-bar"><span>อัปเดตล่าสุด ${escapeHtml(updatedAt)}</span><span class="version" title="${versionTitle}">เวอร์ชัน ${versionShort}</span><span class="nav-actions"><a class="refresh manage" href="/control/technicians">จัดการช่าง</a><a class="refresh" href="/control">รีเฟรช</a></span></div><div class="eyebrow"><span class="dot"></span>สถานะระบบล่าสุด</div><h1>${statusText}</h1><p class="detail">${statusDetail}</p>
   ${alerts}
   ${actionForm}
-  <div class="pipeline"><div class="step"><small>ขั้นที่ 1</small><b>OCR.space</b><em>ตรวจ 500 รูปแรกของวัน</em></div><div class="step"><small>ขั้นที่ 2</small><b>Workers AI</b><em>ตรวจเมื่อ OCR.space ครบหรือข้อมูลไม่พอ</em></div><div class="step"><small>ขั้นที่ 3</small><b>Google Vision</b><em>ตรวจยืนยันเมื่อ Workers AI ยังตัดสินไม่ได้</em></div></div>
+  <div class="pipeline"><div class="step"><small>ขั้นที่ 1</small><b>PaddleOCR</b><em>ตัวตรวจหลัก · สูงสุด 5 งานพร้อมกัน</em></div><div class="step"><small>ขั้นที่ 2</small><b>OCR.space</b><em>สำรองเมื่อ Paddle ขัดข้อง · สูงสุด 2 งาน</em></div><div class="step"><small>ขั้นที่ 3</small><b>Workers AI</b><em>ตรวจเมื่อข้อความยังไม่ชัดเจน</em></div><div class="step"><small>ขั้นที่ 4</small><b>Google Vision</b><em>ตรวจยืนยันขั้นสุดท้าย</em></div></div>
   <div class="section-title">สถิติวันนี้</div>
   <div class="stats">
     <div class="stat"><small>รับเข้าคิว</small><strong>${providers.dailyStats.received}</strong></div>
@@ -485,10 +496,11 @@ function controlPage(enabled: boolean, providers: ProviderStatus): string {
   </div>
   <div class="section-title">โควตาและการตั้งค่า</div>
   <div class="meta">
+    <div class="item"><small>PaddleOCR</small><b class="${providers.paddleOcrConfigured ? "ok" : "warn"}">${providers.paddleOcrConfigured ? "พร้อมใช้งาน" : "ยังไม่ได้ตั้งค่า token"}</b><em>ตัวตรวจหลัก · ผลข้อความจะแสดงในรายละเอียด Log</em></div>
     <div class="item"><small>OCR.space วันนี้</small><b class="${providers.ocrSpaceConfigured ? "ok" : "warn"}">${providers.ocrSpaceUsage} / ${OCR_SPACE_DAILY_LIMIT} รูป</b><div class="meter"><span></span></div><em>${ocrSpaceState}</em></div>
     <div class="item"><small>Workers AI</small><b class="${enabled ? "ok" : ""}">${enabled ? "พร้อมเป็นระบบสำรอง" : "ไม่ถูกเรียกใช้งาน"}</b><em>ระบบไม่สามารถอ่านโควตาคงเหลือจาก binding ได้</em></div>
     <div class="item"><small>Google Vision เดือนนี้ (ประมาณการ)</small><b class="${googleVisionTone}">${providers.googleVisionUsage} / ${GOOGLE_VISION_FREE_MONTHLY_UNITS} units</b><div class="meter"><span style="width:${Math.min((providers.googleVisionUsage / GOOGLE_VISION_FREE_MONTHLY_UNITS) * 100, 100)}%;background:${googleVisionTone === "danger" ? "#f06474" : googleVisionTone === "warn" ? "#ffd477" : "#30dc78"}"></span></div><em>${googleVisionState}</em></div>
-    <div class="item"><small>คิวและกฎปัจจุบัน</small><b>ตรวจพร้อมกันสูงสุด 2 รูป · รวมผลตามกลุ่มและผู้ส่ง</b><em>รับเลขงาน 8 หลักก่อนรูป · KPLUS/K+/Thai QR Payment + SETTLEMENT + ยอด 1.22 หรือ -1.22</em></div>
+    <div class="item"><small>คิวและกฎปัจจุบัน</small><b>Paddle 5 งาน · OCR.space 2 งาน · รวมผลตามกลุ่มและผู้ส่ง</b><em>รับเลขงาน 8 หลักก่อนรูป · KPLUS/K+/Thai QR Payment + SETTLEMENT + ยอด 1.22 หรือ -1.22</em></div>
   </div>
   <div class="notice">OCR.space นับตามวันที่ประเทศไทย ส่วน Google Vision เป็นค่าประมาณรายเดือนที่นับเฉพาะคำขอสำเร็จจาก Worker นี้ตั้งแต่เริ่มใช้ตัวนับ ไม่รวมระบบอื่นใน Google Cloud Project การเปลี่ยนสถานะอาจใช้เวลาสั้น ๆ ก่อนมีผลครบทุกศูนย์ข้อมูล</div>
   <div class="log-actions"><div class="section-title">Log การตรวจล่าสุด 50 รูป</div><form class="clear-logs" method="get" action="/control/confirm"><input type="hidden" name="target" value="clear-logs"><button type="submit">ล้าง Log</button></form></div>
@@ -511,7 +523,7 @@ export async function handleControlRequest(
   request: Request,
   env: Pick<
     Env,
-    "CONTROL_PASSWORD" | "CONTROL_DB" | "OPERATIONAL_COUNTERS" | "OCR_SPACE_API_KEY" | "GOOGLE_VISION_API_KEY" | "PROCESSING_FORCE_DISABLED"
+    "CONTROL_PASSWORD" | "CONTROL_DB" | "OPERATIONAL_COUNTERS" | "PADDLEOCR_TOKEN" | "OCR_SPACE_API_KEY" | "GOOGLE_VISION_API_KEY" | "PROCESSING_FORCE_DISABLED"
   > & { CF_VERSION_METADATA?: WorkerVersionMetadata },
 ): Promise<Response | null> {
   const url = new URL(request.url);
@@ -613,6 +625,7 @@ export async function handleControlRequest(
       safeInspectionLogs(env.CONTROL_DB),
     ]);
     return htmlResponse(controlPage(enabled, {
+      paddleOcrConfigured: Boolean(env.PADDLEOCR_TOKEN),
       ocrSpaceConfigured: Boolean(env.OCR_SPACE_API_KEY),
       ocrSpaceUsage,
       googleVisionConfigured: Boolean(env.GOOGLE_VISION_API_KEY),

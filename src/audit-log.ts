@@ -8,6 +8,7 @@ export type LineDeliveryMethod = "reply" | "push";
 export interface InspectionTrace {
   providers: string[];
   providerTimings: Record<string, number>;
+  paddleOcrText?: string;
   stage?: string;
   observedAmounts?: number[];
   hasKplus?: boolean;
@@ -24,6 +25,7 @@ export interface InspectionLogRow {
   stage: string | null;
   provider_chain: string | null;
   provider_timings: string | null;
+  paddle_ocr_text: string | null;
   observed_amounts: string | null;
   has_kplus: number | null;
   has_settlement: number | null;
@@ -52,10 +54,10 @@ export async function recordInspectionLog(
     db.prepare(`INSERT INTO inspection_logs (
       webhook_event_id, message_id, conversation_id, sender_user_id,
       reference_code, outcome, stage, provider_chain, provider_timings,
-      observed_amounts, has_kplus, has_settlement, queue_delay_ms,
+      paddle_ocr_text, observed_amounts, has_kplus, has_settlement, queue_delay_ms,
       processing_ms, error, line_delivery_status, line_delivery_method,
       line_delivery_updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
       .bind(
         job.webhookEventId,
         job.messageId,
@@ -66,6 +68,7 @@ export async function recordInspectionLog(
         limited(trace.stage, 120),
         trace.providers.join(" > ") || null,
         JSON.stringify(trace.providerTimings),
+        limited(trace.paddleOcrText, 4_000),
         trace.observedAmounts ? JSON.stringify(trace.observedAmounts) : null,
         trace.hasKplus === undefined ? null : Number(trace.hasKplus),
         trace.hasSettlement === undefined ? null : Number(trace.hasSettlement),
@@ -90,7 +93,7 @@ export async function listInspectionLogs(
   const safeLimit = Math.min(Math.max(Math.trunc(limit), 1), 100);
   const result = await db.prepare(`SELECT
       id, created_at, reference_code, outcome, stage, provider_chain,
-      provider_timings, observed_amounts, has_kplus, has_settlement,
+      provider_timings, paddle_ocr_text, observed_amounts, has_kplus, has_settlement,
       queue_delay_ms, processing_ms, error, line_delivery_status,
       line_delivery_method, line_delivery_updated_at
     FROM inspection_logs
