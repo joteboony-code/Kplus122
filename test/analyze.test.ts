@@ -17,6 +17,7 @@ import {
   parseKplusVisualCandidate,
   routeOcrSpaceDecision,
   routePaddleOcrDecision,
+  shouldContinueToGoogleVision,
   shouldReplyAfterGoogleVision,
 } from "../src/analyze";
 
@@ -117,13 +118,41 @@ describe("receipt decision", () => {
 
   it.each([
     "CHANNEL: KPLUS\nTHAI QR PAYMENT\nAMT: THB 5.00",
-    "SETTLEMENT\nAMT: THB 5.00",
     "THAI QR PAYMENT\nAMT: THB 5.00",
-  ])("does not send OCR.space partial evidence to fallback: %s", (text) => {
-    const inspection = inspectConfirmedReceiptText(text);
+  ])("continues detailed inspection when OCR.space finds KPLUS without SETTLEMENT: %s", (text) => {
+    const inspection = acceptWorkerPaymentName(
+      inspectConfirmedReceiptText(text),
+      text,
+    );
+    const decision = decideReceipt(inspection, 1.22, -1.22, 0.65);
+
+    expect(routeOcrSpaceDecision(decision, inspection)).toBe("fallback");
+  });
+
+  it("keeps known KPLUS evidence sticky when OCR.space misses it", () => {
+    const inspection = inspectConfirmedReceiptText(
+      "OTHER RECEIPT\nAMT: THB 5.00",
+    );
+    const decision = decideReceipt(inspection, 1.22, -1.22, 0.65);
+
+    expect(routeOcrSpaceDecision(decision, inspection, true)).toBe("fallback");
+  });
+
+  it("still ignores OCR.space evidence when no provider finds KPLUS", () => {
+    const inspection = inspectConfirmedReceiptText(
+      "SETTLEMENT\nAMT: THB 5.00",
+    );
     const decision = decideReceipt(inspection, 1.22, -1.22, 0.65);
 
     expect(routeOcrSpaceDecision(decision, inspection)).toBe("ignore");
+  });
+
+  it("continues from Workers AI to Google when an earlier provider found KPLUS", () => {
+    expect(shouldContinueToGoogleVision(true, false, false)).toBe(true);
+  });
+
+  it("stops before Google when no provider or classifier finds useful evidence", () => {
+    expect(shouldContinueToGoogleVision(false, false, false)).toBe(false);
   });
 
   it.each([

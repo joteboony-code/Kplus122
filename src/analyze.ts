@@ -221,6 +221,18 @@ export function hasGoogleCandidateTextEvidence(
   );
 }
 
+export function shouldContinueToGoogleVision(
+  hasKnownKplusEvidence: boolean,
+  hasPartialTextEvidence: boolean,
+  visualKplusCandidate: boolean,
+): boolean {
+  return (
+    hasKnownKplusEvidence ||
+    hasPartialTextEvidence ||
+    visualKplusCandidate
+  );
+}
+
 export function decideReceipt(
   inspection: ReceiptInspection,
   expectedSale: number,
@@ -254,9 +266,10 @@ export function decideReceipt(
 export function routeOcrSpaceDecision(
   decision: ReceiptDecision,
   inspection: ReceiptInspection,
+  hasPriorKplusEvidence = false,
 ): "pass" | "fallback" | "ignore" {
   if (decision.status === "pass") return "pass";
-  return inspection.isKplusReceipt && inspection.hasSettlement
+  return inspection.isKplusReceipt || hasPriorKplusEvidence
     ? "fallback"
     : "ignore";
 }

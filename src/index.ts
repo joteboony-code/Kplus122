@@ -12,6 +12,7 @@ import {
   hasExpectedAmount,
   routeOcrSpaceDecision,
   routePaddleOcrDecision,
+  shouldContinueToGoogleVision,
   shouldReplyAfterGoogleVision,
   transcribeVisibleText,
 } from "./analyze";
@@ -307,7 +308,7 @@ function updateTraceFromInspection(
   stage: string,
 ): void {
   trace.stage = stage;
-  trace.hasKplus = inspection.isKplusReceipt;
+  trace.hasKplus = Boolean(trace.hasKplus || inspection.isKplusReceipt);
   trace.hasSettlement = inspection.hasSettlement;
   trace.observedAmounts = inspection.observedAmounts;
 }
@@ -650,6 +651,7 @@ async function processImageJob(
   const expectedSale = numericSetting(env.EXPECTED_SALE_AMOUNT, "EXPECTED_SALE_AMOUNT");
   const expectedVoid = numericSetting(env.EXPECTED_VOID_AMOUNT, "EXPECTED_VOID_AMOUNT");
   const minConfidence = numericSetting(env.MIN_CONFIDENCE, "MIN_CONFIDENCE");
+  let hasKnownKplusEvidence = paddleInspection?.isKplusReceipt ?? false;
 
   if (await hasRecentPass(job, d1StateStore(env.CONTROL_DB))) {
     trace.stage = "recent-pass-suppression";
@@ -731,7 +733,9 @@ async function processImageJob(
         const ocrSpaceRoute = routeOcrSpaceDecision(
           ocrSpaceDecision,
           ocrSpaceInspection,
+          hasKnownKplusEvidence,
         );
+        hasKnownKplusEvidence ||= ocrSpaceInspection.isKplusReceipt;
         updateTraceFromInspection(trace, ocrSpaceInspection, "ocr-space");
         if (ocrSpaceRoute === "pass") {
           const matchedAmount = ocrSpaceInspection.observedAmounts.find(
@@ -790,7 +794,10 @@ async function processImageJob(
         console.log(JSON.stringify({
           event: "ocr_space_fallback",
           webhookEventId: job.webhookEventId,
-          reason: "expected-amount-not-found",
+          reason: ocrSpaceInspection.isKplusReceipt && ocrSpaceInspection.hasSettlement
+            ? "expected-amount-not-found"
+            : "known-kplus-requires-detailed-check",
+          hasKnownKplusEvidence,
           ocrSpaceUsage,
         }));
       }
@@ -834,6 +841,7 @@ async function processImageJob(
     expectedVoid,
     minConfidence,
   );
+  hasKnownKplusEvidence ||= acceptedWorkerInspection.isKplusReceipt;
   updateTraceFromInspection(trace, acceptedWorkerInspection, "workers-ai");
 
   if (workerDecision.status === "pass") {
@@ -872,9 +880,11 @@ async function processImageJob(
       throw error;
     }
   }
-  const googleCandidate =
-    hasPartialTextEvidence ||
-    visualKplusCandidate;
+  const googleCandidate = shouldContinueToGoogleVision(
+    hasKnownKplusEvidence,
+    hasPartialTextEvidence,
+    visualKplusCandidate,
+  );
 
   if (!googleCandidate) {
     trace.stage = "workers-ai-filter";
@@ -887,6 +897,7 @@ async function processImageJob(
       workerHasSettlement: workerInspection.hasSettlement,
       workerHasAnyAmount,
       workerMatchedThaiQr,
+      hasKnownKplusEvidence,
       visualClassifierAttempted,
       visualKplusCandidate,
     }));
@@ -946,6 +957,7 @@ async function processImageJob(
       workerHasSettlement: workerInspection.hasSettlement,
       workerHasAnyAmount,
       workerMatchedThaiQr,
+      hasKnownKplusEvidence,
       visualClassifierAttempted,
       visualKplusCandidate,
       googleVisionUsage,
