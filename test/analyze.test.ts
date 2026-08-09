@@ -9,6 +9,7 @@ import {
   hasGoogleCandidateTextEvidence,
   hasSettlementText,
   hasThaiQrPaymentText,
+  hasWrongAmountConsensus,
   inspectConfirmedReceiptText,
   inspectReceiptText,
   isConfirmedKplusReceiptText,
@@ -195,6 +196,70 @@ describe("receipt decision", () => {
       );
     },
   );
+
+  it("stops after PaddleOCR and OCR.space agree on the same wrong amount", () => {
+    const paddle = inspectConfirmedReceiptText(
+      "CHANNEL: KPLUS\nSETTLEMENT\nAMT: THB 5.00",
+    );
+    const ocrSpace = inspectConfirmedReceiptText(
+      "CHANNEL: KPLUS\nSETTLEMENT\nAMOUNT: 5.00 THB",
+    );
+
+    expect(hasWrongAmountConsensus(paddle, ocrSpace, 1.22, -1.22)).toBe(true);
+  });
+
+  it("accepts the normal OCR amount tolerance for wrong-amount consensus", () => {
+    const paddle = inspectConfirmedReceiptText(
+      "CHANNEL: KPLUS\nSETTLEMENT\nAMT: THB 5.00",
+    );
+    const ocrSpace = {
+      ...paddle,
+      observedAmounts: [5.004],
+      labeledAmounts: [5.004],
+    };
+
+    expect(hasWrongAmountConsensus(paddle, ocrSpace, 1.22, -1.22)).toBe(true);
+  });
+
+  it.each([
+    {
+      name: "one provider cannot read an amount",
+      paddle: "CHANNEL: KPLUS\nSETTLEMENT\nAMT: THB unreadable",
+      ocrSpace: "CHANNEL: KPLUS\nSETTLEMENT\nAMT: THB 5.00",
+    },
+    {
+      name: "the providers read different amounts",
+      paddle: "CHANNEL: KPLUS\nSETTLEMENT\nAMT: THB 5.00",
+      ocrSpace: "CHANNEL: KPLUS\nSETTLEMENT\nAMT: THB 8.00",
+    },
+    {
+      name: "only one amount overlaps",
+      paddle: "CHANNEL: KPLUS\nSETTLEMENT\nTHB 0.00\nTHB 5.00",
+      ocrSpace: "CHANNEL: KPLUS\nSETTLEMENT\nTHB 0.00\nTHB 8.00",
+    },
+    {
+      name: "KPLUS is missing",
+      paddle: "SETTLEMENT\nAMT: THB 5.00",
+      ocrSpace: "CHANNEL: KPLUS\nSETTLEMENT\nAMT: THB 5.00",
+    },
+    {
+      name: "SETTLEMENT is missing",
+      paddle: "CHANNEL: KPLUS\nAMT: THB 5.00",
+      ocrSpace: "CHANNEL: KPLUS\nSETTLEMENT\nAMT: THB 5.00",
+    },
+    {
+      name: "one provider finds the expected amount",
+      paddle: "CHANNEL: KPLUS\nSETTLEMENT\nAMT: THB 5.00",
+      ocrSpace: "CHANNEL: KPLUS\nSETTLEMENT\nAMT: THB 1.22",
+    },
+  ])("continues fallback when $name", ({ paddle, ocrSpace }) => {
+    expect(hasWrongAmountConsensus(
+      inspectConfirmedReceiptText(paddle),
+      inspectConfirmedReceiptText(ocrSpace),
+      1.22,
+      -1.22,
+    )).toBe(false);
+  });
 
   it("does not use generic receipt structure as Google evidence", () => {
     const inspection = inspectReceiptText(

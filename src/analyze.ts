@@ -275,6 +275,41 @@ export function routePaddleOcrDecision(
   return hasFallbackEvidence ? "fallback" : "ignore";
 }
 
+function comparableAmounts(inspection: ReceiptInspection): number[] {
+  const amounts = inspection.labeledAmounts.length > 0
+    ? inspection.labeledAmounts
+    : inspection.observedAmounts;
+  return [...amounts].sort((left, right) => left - right);
+}
+
+export function hasWrongAmountConsensus(
+  first: ReceiptInspection,
+  second: ReceiptInspection,
+  expectedSale: number,
+  expectedVoid: number,
+): boolean {
+  if (
+    !first.isKplusReceipt ||
+    !first.hasSettlement ||
+    !second.isKplusReceipt ||
+    !second.hasSettlement ||
+    hasExpectedAmount(first, expectedSale, expectedVoid) ||
+    hasExpectedAmount(second, expectedSale, expectedVoid)
+  ) {
+    return false;
+  }
+
+  const firstAmounts = comparableAmounts(first);
+  const secondAmounts = comparableAmounts(second);
+  return (
+    firstAmounts.length > 0 &&
+    firstAmounts.length === secondAmounts.length &&
+    firstAmounts.every((amount, index) =>
+      amountsEqual(secondAmounts[index] ?? null, amount)
+    )
+  );
+}
+
 export function shouldReplyAfterGoogleVision(
   inspection: ReceiptInspection,
 ): boolean {

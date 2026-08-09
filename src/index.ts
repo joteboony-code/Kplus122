@@ -6,6 +6,7 @@ import {
   formatDecision,
   hasGoogleCandidateTextEvidence,
   hasThaiQrPaymentText,
+  hasWrongAmountConsensus,
   inspectConfirmedReceiptText,
   inspectReceiptText,
   hasExpectedAmount,
@@ -85,6 +86,7 @@ import {
   type OcrFallbackJob,
   type PaddlePollJob,
   type QueueJob,
+  type ReceiptInspection,
   type RoundFinalizeJob,
 } from "./types";
 
@@ -95,6 +97,12 @@ interface ProcessResult {
 }
 
 const IGNORED_RESULT: ProcessResult = { outcome: "ignored" };
+
+interface ProcessImageOptions {
+  skipOcrSpace?: boolean;
+  downloadedImage?: Uint8Array;
+  paddleInspection?: ReceiptInspection;
+}
 
 interface PreparedTechnicianServiceAlert {
   lineUserId: string;
@@ -632,9 +640,13 @@ async function processImageJob(
   job: ImageJob,
   env: Env,
   trace: InspectionTrace,
-  skipOcrSpace = false,
-  downloadedImage?: Uint8Array,
+  options: ProcessImageOptions = {},
 ): Promise<ProcessResult> {
+  const {
+    skipOcrSpace = false,
+    downloadedImage,
+    paddleInspection,
+  } = options;
   const expectedSale = numericSetting(env.EXPECTED_SALE_AMOUNT, "EXPECTED_SALE_AMOUNT");
   const expectedVoid = numericSetting(env.EXPECTED_VOID_AMOUNT, "EXPECTED_VOID_AMOUNT");
   const minConfidence = numericSetting(env.MIN_CONFIDENCE, "MIN_CONFIDENCE");
@@ -734,6 +746,34 @@ async function processImageJob(
             env,
             trace,
           );
+        }
+
+        if (
+          ocrSpaceRoute === "fallback" &&
+          paddleInspection &&
+          hasWrongAmountConsensus(
+            paddleInspection,
+            ocrSpaceInspection,
+            expectedSale,
+            expectedVoid,
+          )
+        ) {
+          trace.stage = "paddle-ocrspace-consensus";
+          console.log(JSON.stringify({
+            event: "ocr_wrong_amount_consensus",
+            webhookEventId: job.webhookEventId,
+            providers: ["paddleocr", "ocr-space"],
+            paddleAmounts: paddleInspection.observedAmounts,
+            ocrSpaceAmounts: ocrSpaceInspection.observedAmounts,
+            ocrSpaceUsage,
+          }));
+          return {
+            outcome: "fail",
+            evidence: {
+              kind: "wrong-amount",
+              text: formatDecision(ocrSpaceInspection, ocrSpaceDecision),
+            },
+          };
         }
 
         if (ocrSpaceRoute === "ignore") {
@@ -1093,7 +1133,10 @@ async function processPaddleText(
     job.messageId,
     env.LINE_CHANNEL_ACCESS_TOKEN,
   );
-  return processImageJob(job, env, trace, false, image);
+  return processImageJob(job, env, trace, {
+    downloadedImage: image,
+    paddleInspection: inspection,
+  });
 }
 
 async function finalizeImageResult(
