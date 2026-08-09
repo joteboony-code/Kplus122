@@ -10,6 +10,7 @@ import {
   inspectReceiptText,
   hasExpectedAmount,
   routeOcrSpaceDecision,
+  routePaddleOcrDecision,
   shouldReplyAfterGoogleVision,
   transcribeVisibleText,
 } from "./analyze";
@@ -1049,7 +1050,12 @@ async function processPaddleText(
     expectedVoid,
     minConfidence,
   );
-  const route = routeOcrSpaceDecision(decision, inspection);
+  const route = routePaddleOcrDecision(
+    decision,
+    inspection,
+    expectedSale,
+    expectedVoid,
+  );
   updateTraceFromInspection(trace, inspection, "paddleocr");
   trace.providers.push("paddleocr");
 
@@ -1070,11 +1076,24 @@ async function processPaddleText(
     return IGNORED_RESULT;
   }
 
+  console.log(JSON.stringify({
+    event: "paddleocr_fallback",
+    webhookEventId: job.webhookEventId,
+    reason: "partial-evidence",
+    paddleMatchedKplus: inspection.isKplusReceipt,
+    paddleHasSettlement: inspection.hasSettlement,
+    paddleHasExpectedAmount: hasExpectedAmount(
+      inspection,
+      expectedSale,
+      expectedVoid,
+    ),
+  }));
+
   const image = await downloadLineImage(
     job.messageId,
     env.LINE_CHANNEL_ACCESS_TOKEN,
   );
-  return processImageJob(job, env, trace, true, image);
+  return processImageJob(job, env, trace, false, image);
 }
 
 async function finalizeImageResult(

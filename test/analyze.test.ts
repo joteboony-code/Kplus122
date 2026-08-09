@@ -15,6 +15,7 @@ import {
   isKplusCandidateText,
   parseKplusVisualCandidate,
   routeOcrSpaceDecision,
+  routePaddleOcrDecision,
   shouldReplyAfterGoogleVision,
 } from "../src/analyze";
 
@@ -123,6 +124,77 @@ describe("receipt decision", () => {
 
     expect(routeOcrSpaceDecision(decision, inspection)).toBe("ignore");
   });
+
+  it.each([
+    {
+      name: "KPLUS only with a wrong amount",
+      text: "CHANNEL: KPLUS\nAMT: THB 5.00",
+    },
+    {
+      name: "KPLUS only with the expected amount",
+      text: "CHANNEL: KPLUS\nAMT: THB 1.22",
+    },
+    {
+      name: "KPLUS only with no readable amount",
+      text: "CHANNEL: KPLUS\nAMT: THB unreadable",
+    },
+    {
+      name: "SETTLEMENT only with a wrong amount",
+      text: "SETTLEMENT\nAMT: THB 5.00",
+    },
+    {
+      name: "SETTLEMENT only with the expected amount",
+      text: "SETTLEMENT\nAMT: THB 1.22",
+    },
+    {
+      name: "SETTLEMENT only with no readable amount",
+      text: "SETTLEMENT\nAMT: THB unreadable",
+    },
+    {
+      name: "the expected amount only",
+      text: "AMT: THB 1.22",
+    },
+    {
+      name: "the expected void amount only",
+      text: "AMT: THB -1.22",
+    },
+    {
+      name: "KPLUS and SETTLEMENT with a wrong amount",
+      text: "CHANNEL: KPLUS\nSETTLEMENT\nAMT: THB 5.00",
+    },
+  ])("sends PaddleOCR $name to OCR.space", ({ text }) => {
+    const inspection = inspectConfirmedReceiptText(text);
+    const decision = decideReceipt(inspection, 1.22, -1.22, 0.65);
+
+    expect(routePaddleOcrDecision(decision, inspection, 1.22, -1.22)).toBe(
+      "fallback",
+    );
+  });
+
+  it("keeps PaddleOCR silent when it finds no KPLUS, SETTLEMENT, or expected amount", () => {
+    const inspection = inspectConfirmedReceiptText(
+      "OTHER RECEIPT\nAMT: THB 5.00",
+    );
+    const decision = decideReceipt(inspection, 1.22, -1.22, 0.65);
+
+    expect(routePaddleOcrDecision(decision, inspection, 1.22, -1.22)).toBe(
+      "ignore",
+    );
+  });
+
+  it.each(["1.22", "-1.22"])(
+    "passes directly from PaddleOCR when all evidence and amount %s are present",
+    (amount) => {
+      const inspection = inspectConfirmedReceiptText(
+        `CHANNEL: KPLUS\nSETTLEMENT\nAMT: THB ${amount}`,
+      );
+      const decision = decideReceipt(inspection, 1.22, -1.22, 0.65);
+
+      expect(routePaddleOcrDecision(decision, inspection, 1.22, -1.22)).toBe(
+        "pass",
+      );
+    },
+  );
 
   it("does not use generic receipt structure as Google evidence", () => {
     const inspection = inspectReceiptText(

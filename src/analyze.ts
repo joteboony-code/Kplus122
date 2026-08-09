@@ -261,6 +261,20 @@ export function routeOcrSpaceDecision(
     : "ignore";
 }
 
+export function routePaddleOcrDecision(
+  decision: ReceiptDecision,
+  inspection: ReceiptInspection,
+  expectedSale: number,
+  expectedVoid: number,
+): "pass" | "fallback" | "ignore" {
+  if (decision.status === "pass") return "pass";
+  const hasFallbackEvidence =
+    inspection.isKplusReceipt ||
+    inspection.hasSettlement ||
+    hasExpectedAmount(inspection, expectedSale, expectedVoid);
+  return hasFallbackEvidence ? "fallback" : "ignore";
+}
+
 export function shouldReplyAfterGoogleVision(
   inspection: ReceiptInspection,
 ): boolean {
