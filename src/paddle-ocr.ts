@@ -2,7 +2,10 @@ const PADDLEOCR_JOB_URL = "https://paddleocr.aistudio-app.com/api/v2/ocr/jobs";
 
 export const DEFAULT_PADDLEOCR_MODEL = "PaddleOCR-VL-1.6";
 export const PADDLEOCR_POLL_DELAY_SECONDS = 3;
-export const MAX_PADDLEOCR_POLLS = 6;
+export const PADDLEOCR_INLINE_POLLS = 2;
+// Two inline polls plus one delayed poll are enough to catch fast jobs while
+// preventing a slow Paddle job from consuming the queue quota indefinitely.
+export const MAX_PADDLEOCR_POLLS = PADDLEOCR_INLINE_POLLS + 1;
 
 export interface PaddleJobStatus {
   state: "pending" | "done";

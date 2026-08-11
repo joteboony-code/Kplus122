@@ -34,6 +34,7 @@ interface ReceiptRoundState {
   stockClaimedAt?: number;
   stockCompletedAt?: number;
   finalizationClaimedAt?: number;
+  finalizerScheduledGeneration?: string;
 }
 
 export interface RoundFinalization {
@@ -133,6 +134,7 @@ export async function recordRoundActivity(
     processedMessageIds,
     latestJob: job,
     evidence: betterEvidence(active?.evidence, evidence),
+    finalizerScheduledGeneration: generation,
   };
   await state.put(roundKey, JSON.stringify(next), {
     expirationTtl: ROUND_STATE_TTL_SECONDS,
@@ -166,6 +168,7 @@ export async function registerRoundImage(
   const isNewer = !active?.latestJob ||
     (job.timestamp ?? now) >= (active.latestJob.timestamp ?? active.updatedAt);
   const nextGeneration = isNewer ? generation : active!.generation;
+  const shouldSchedule = active?.finalizerScheduledGeneration !== nextGeneration;
   await state.put(roundKey, JSON.stringify({
     ...active,
     generation: nextGeneration,
@@ -173,10 +176,13 @@ export async function registerRoundImage(
     processedMessageIds: active?.processedMessageIds ?? [],
     pendingMessageIds,
     latestJob: isNewer ? job : active!.latestJob,
+    finalizerScheduledGeneration: nextGeneration,
   } satisfies ReceiptRoundState), {
     expirationTtl: ROUND_STATE_TTL_SECONDS,
   });
-  return { kind: "round-finalize", roundKey, generation: nextGeneration };
+  return shouldSchedule
+    ? { kind: "round-finalize", roundKey, generation: nextGeneration }
+    : null;
 }
 
 export async function completeRoundImage(
@@ -518,6 +524,7 @@ export async function completeRoundFinalization(
   if (!current || current.generation !== job.generation) return;
   const {
     finalizationClaimedAt: _claim,
+    finalizerScheduledGeneration: _scheduledGeneration,
     evidence: _evidence,
     latestJob: _latestJob,
     ...next

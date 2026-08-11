@@ -60,10 +60,19 @@ import { d1StateStore, purgeExpiredState } from "./state-store";
 import {
   DEFAULT_PADDLEOCR_MODEL,
   MAX_PADDLEOCR_POLLS,
+  PADDLEOCR_INLINE_POLLS,
   PADDLEOCR_POLL_DELAY_SECONDS,
   pollPaddleOcr,
   submitPaddleOcr,
 } from "./paddle-ocr";
+import {
+  deferPendingQueueJob,
+  listPendingQueueJobs,
+  removePendingQueueJob,
+  savePendingQueueJobs,
+  type PendingQueueItem,
+  type PendingQueueTarget,
+} from "./pending-queue-jobs";
 import {
   fetchCastleServiceSnapshot,
   formatServiceLookMessages,
@@ -82,6 +91,7 @@ import {
   isPaddlePollJob,
   isRoundFinalizeJob,
   type ImageJob,
+  type LineWebhookQueueJob,
   type LineWebhookEvent,
   type LineWebhookBody,
   type OcrFallbackJob,
@@ -350,6 +360,132 @@ function numericSetting(value: string, name: string): number {
   return parsed;
 }
 
+function queueErrorText(error: unknown): string {
+  return (error instanceof Error ? error.message : String(error)).slice(0, 500);
+}
+
+async function sendQueueBodies(
+  target: PendingQueueTarget,
+  bodies: QueueJob[],
+  env: Env,
+): Promise<void> {
+  if (bodies.length === 0) return;
+  if (target === "images") {
+    await env.IMAGE_QUEUE.sendBatch(
+      bodies.map((body) => ({
+        body: body as ImageJob | RoundFinalizeJob | PaddlePollJob,
+      })),
+    );
+    return;
+  }
+  if (target === "ocr-fallback") {
+    await env.OCR_FALLBACK_QUEUE.sendBatch(
+      bodies.map((body) => ({ body: body as OcrFallbackJob })),
+    );
+    return;
+  }
+  await env.LINE_WEBHOOKS.sendBatch(
+    bodies.map((body) => ({ body: body as LineWebhookQueueJob })),
+  );
+}
+
+async function enqueueQueueBodiesSafely(
+  target: PendingQueueTarget,
+  bodies: QueueJob[],
+  env: Env,
+): Promise<"queued" | "deferred"> {
+  try {
+    await sendQueueBodies(target, bodies, env);
+    return "queued";
+  } catch (error) {
+    const detail = queueErrorText(error);
+    try {
+      const stored = await savePendingQueueJobs(
+        env.CONTROL_DB,
+        target,
+        bodies,
+        detail,
+      );
+      console.error(JSON.stringify({
+        event: "queue_write_deferred",
+        target,
+        count: bodies.length,
+        stored,
+        error: detail,
+      }));
+      return "deferred";
+    } catch (persistError) {
+      console.error(JSON.stringify({
+        event: "queue_write_deferred_persist_failed",
+        target,
+        count: bodies.length,
+        error: detail,
+        persistError: queueErrorText(persistError),
+      }));
+      throw persistError;
+    }
+  }
+}
+
+async function enqueueImageJobs(
+  jobs: ImageJob[],
+  env: Env,
+): Promise<{ queued: number; deferred: number }> {
+  let queued = 0;
+  let deferred = 0;
+  for (let index = 0; index < jobs.length; index += 100) {
+    const chunk = jobs.slice(index, index + 100);
+    const result = await enqueueQueueBodiesSafely("images", chunk, env);
+    if (result === "queued") queued += chunk.length;
+    else deferred += chunk.length;
+  }
+  return { queued, deferred };
+}
+
+async function drainPendingQueueJobs(env: Env): Promise<{
+  sent: number;
+  deferred: number;
+}> {
+  const items = await listPendingQueueJobs(env.CONTROL_DB, Date.now(), 100);
+  if (items.length === 0) return { sent: 0, deferred: 0 };
+
+  const groups = new Map<PendingQueueTarget, PendingQueueItem[]>();
+  for (const item of items) {
+    const group = groups.get(item.target) ?? [];
+    group.push(item);
+    groups.set(item.target, group);
+  }
+
+  let sent = 0;
+  let deferred = 0;
+  for (const [target, group] of groups) {
+    for (let index = 0; index < group.length; index += 100) {
+      const chunk = group.slice(index, index + 100);
+      try {
+        await sendQueueBodies(target, chunk.map((item) => item.body), env);
+        await Promise.all(
+          chunk.map((item) => removePendingQueueJob(env.CONTROL_DB, item.key)),
+        );
+        sent += chunk.length;
+      } catch (error) {
+        await Promise.all(
+          chunk.map((item) =>
+            deferPendingQueueJob(env.CONTROL_DB, item, error),
+          ),
+        );
+        deferred += chunk.length;
+        console.error(JSON.stringify({
+          event: "pending_queue_drain_deferred",
+          target,
+          count: chunk.length,
+          error: queueErrorText(error),
+        }));
+      }
+    }
+  }
+  return { sent, deferred };
+}
+
 async function claimStockFlex(job: ImageJob, env: Env): Promise<boolean> {
   const roundKey = receiptRoundKey(job);
   if (!roundKey) return true;
@@ -561,7 +697,7 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
   }
 
   const operationalState = d1StateStore(env.CONTROL_DB);
-  const imageEvents: LineWebhookEvent[] = [];
+  const imageJobs: ImageJob[] = [];
   for (const event of payload.events ?? []) {
     const serviceLookContext = serviceLookContextFromEvent(event);
     if (serviceLookContext) {
@@ -577,27 +713,81 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
         scope.senderId,
         referenceCode,
         operationalState,
+        event.timestamp,
       );
       console.log(JSON.stringify({
         event: "job_reference_recorded",
         referenceCode,
         sourceType: event.source?.type,
+        timestamp: event.timestamp,
       }));
       continue;
     }
 
-    if (imageJobFromEvent(event)) imageEvents.push(event);
+    const imageJob = imageJobFromEvent(event);
+    if (imageJob) {
+      const scope = conversationAndSenderFromEvent(event);
+      if (scope) {
+        imageJob.referenceCode = await getJobReference(
+          scope.conversationId,
+          scope.senderId,
+          operationalState,
+          imageJob.timestamp,
+        );
+      }
+      console.log(JSON.stringify({
+        event: "image_job_reference_bound",
+        messageId: imageJob.messageId,
+        referenceCode: imageJob.referenceCode,
+        timestamp: imageJob.timestamp,
+      }));
+      imageJobs.push(imageJob);
+    }
   }
 
-  if (imageEvents.length > 0) {
-    await env.LINE_WEBHOOKS.send({
-      kind: "line-webhook",
-      events: imageEvents,
-      receivedAtMs: Date.now(),
+  if (imageJobs.length > 0) {
+    if (!(await isProcessingEnabled(
+      env.CONTROL_DB,
+      String(env.PROCESSING_FORCE_DISABLED) === "true",
+    ))) {
+      console.log(JSON.stringify({
+        event: "webhook_images_skipped",
+        reason: "processing-disabled",
+        imageCount: imageJobs.length,
+      }));
+      return Response.json({ accepted: imageJobs.length, queued: 0, deferred: 0 });
+    }
+    let enqueueResult: { queued: number; deferred: number };
+    try {
+      enqueueResult = await enqueueImageJobs(imageJobs, env);
+    } catch (error) {
+      console.error(JSON.stringify({
+        event: "image_queue_enqueue_failed",
+        imageCount: imageJobs.length,
+        error: queueErrorText(error),
+      }));
+      return Response.json({
+        accepted: 0,
+        queued: 0,
+        deferred: 0,
+        error: "deferred-storage-failed",
+      }, { status: 503 });
+    }
+    console.log(JSON.stringify({
+      event: "image_jobs_enqueued",
+      route: "direct-image-queue",
+      imageCount: imageJobs.length,
+      queued: enqueueResult.queued,
+      deferred: enqueueResult.deferred,
+    }));
+    return Response.json({
+      accepted: imageJobs.length,
+      queued: enqueueResult.queued,
+      deferred: enqueueResult.deferred,
     });
   }
 
-  return Response.json({ accepted: imageEvents.length });
+  return Response.json({ accepted: 0, queued: 0, deferred: 0 });
 }
 
 async function processQueuedWebhookEvents(
@@ -622,18 +812,18 @@ async function processQueuedWebhookEvents(
     const job = imageJobFromEvent(event);
     if (!job) continue;
     const scope = conversationAndSenderFromEvent(event);
-    if (scope) {
+    if (scope && !job.referenceCode) {
       job.referenceCode = await getJobReference(
         scope.conversationId,
         scope.senderId,
         operationalState,
+        job.timestamp,
       );
     }
-    await registerStockRoundImage(job, env);
     jobs.push(job);
   }
   if (jobs.length > 0) {
-    await env.IMAGE_QUEUE.sendBatch(jobs.map((body) => ({ body })));
+    await enqueueImageJobs(jobs, env);
   }
 }
 
@@ -1025,33 +1215,61 @@ function paddleStateKey(job: ImageJob): string {
   return `paddle-job:${job.webhookEventId}:${job.messageId}`;
 }
 
-async function enqueueOcrFallback(
+async function processPaddleFallbackInline(
   job: ImageJob,
   reason: string,
   env: Env,
+  trace: InspectionTrace,
+  startedAt: number,
 ): Promise<void> {
-  await env.OCR_FALLBACK_QUEUE.send({
-    kind: "ocr-fallback",
-    job,
-    reason: reason.slice(0, 500),
-  });
   console.warn(JSON.stringify({
-    event: "paddleocr_fallback_enqueued",
+    event: "paddleocr_fallback_inline",
     messageId: job.messageId,
     reason,
   }));
+  const result = await processImageJob(job, env, trace);
+  await finalizeImageResult(job, result, env, trace, startedAt);
 }
 
-async function submitPaddleJob(job: ImageJob, env: Env): Promise<void> {
+function waitForPaddlePoll(): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, PADDLEOCR_POLL_DELAY_SECONDS * 1000);
+  });
+}
+
+async function finalizePaddleText(
+  job: ImageJob,
+  text: string,
+  env: Env,
+  trace: InspectionTrace,
+  startedAt: number,
+): Promise<void> {
+  const result = await processPaddleText(job, text, env, trace);
+  await finalizeImageResult(job, result, env, trace, startedAt);
+}
+
+async function submitPaddleJob(
+  job: ImageJob,
+  env: Env,
+  trace: InspectionTrace,
+  startedAt: number,
+): Promise<void> {
   const token = env.PADDLEOCR_TOKEN?.trim();
   if (!token) {
-    await enqueueOcrFallback(job, "PADDLEOCR_TOKEN is not configured", env);
+    await processPaddleFallbackInline(
+      job,
+      "PADDLEOCR_TOKEN is not configured",
+      env,
+      trace,
+      startedAt,
+    );
     return;
   }
 
   const store = d1StateStore(env.CONTROL_DB);
   const key = paddleStateKey(job);
   let jobId = await store.get(key);
+  let downstreamStarted = false;
   try {
     if (!jobId) {
       const image = await downloadLineImage(
@@ -1070,15 +1288,50 @@ async function submitPaddleJob(job: ImageJob, env: Env): Promise<void> {
         paddleJobId: jobId,
       }));
     }
-    await env.IMAGE_QUEUE.send({
+    for (let pollCount = 0; pollCount < PADDLEOCR_INLINE_POLLS; pollCount += 1) {
+      const status = await timedProvider(
+        trace,
+        "paddleocr-poll",
+        () => pollPaddleOcr(jobId!, token),
+      );
+      if (status.state === "done") {
+        downstreamStarted = true;
+        await finalizePaddleText(job, status.text ?? "", env, trace, startedAt);
+        return;
+      }
+      if (pollCount + 1 < PADDLEOCR_INLINE_POLLS) await waitForPaddlePoll();
+    }
+
+    const delayedPoll: PaddlePollJob = {
       kind: "paddle-poll",
       job,
       paddleJobId: jobId,
-      pollCount: 0,
-    }, { delaySeconds: PADDLEOCR_POLL_DELAY_SECONDS });
+      pollCount: PADDLEOCR_INLINE_POLLS,
+    };
+    try {
+      await env.IMAGE_QUEUE.send(
+        delayedPoll,
+        { delaySeconds: PADDLEOCR_POLL_DELAY_SECONDS },
+      );
+    } catch (error) {
+      downstreamStarted = true;
+      await processPaddleFallbackInline(
+        job,
+        `PaddleOCR delayed poll queue failed: ${queueErrorText(error)}`,
+        env,
+        trace,
+        startedAt,
+      );
+    }
   } catch (error) {
-    const detail = error instanceof Error ? error.message : "unknown error";
-    await enqueueOcrFallback(job, `PaddleOCR submit failed: ${detail}`, env);
+    if (downstreamStarted) throw error;
+    await processPaddleFallbackInline(
+      job,
+      `PaddleOCR submit/poll failed: ${queueErrorText(error)}`,
+      env,
+      trace,
+      startedAt,
+    );
   }
 }
 
@@ -1213,7 +1466,13 @@ async function processPaddlePoll(
 ): Promise<"pending" | "finalized" | "fallback"> {
   const token = env.PADDLEOCR_TOKEN?.trim();
   if (!token) {
-    await enqueueOcrFallback(data.job, "PADDLEOCR_TOKEN is not configured", env);
+    await processPaddleFallbackInline(
+      data.job,
+      "PADDLEOCR_TOKEN is not configured",
+      env,
+      trace,
+      startedAt,
+    );
     return "fallback";
   }
   let status: Awaited<ReturnType<typeof pollPaddleOcr>>;
@@ -1224,33 +1483,51 @@ async function processPaddlePoll(
       () => pollPaddleOcr(data.paddleJobId, token),
     );
   } catch (error) {
-    const detail = error instanceof Error ? error.message : "unknown error";
-    await enqueueOcrFallback(data.job, `PaddleOCR failed: ${detail}`, env);
+    await processPaddleFallbackInline(
+      data.job,
+      `PaddleOCR poll failed: ${queueErrorText(error)}`,
+      env,
+      trace,
+      startedAt,
+    );
     return "fallback";
   }
   if (status.state === "pending") {
     const pollCount = data.pollCount + 1;
     if (pollCount >= MAX_PADDLEOCR_POLLS) {
-      await enqueueOcrFallback(
+      await processPaddleFallbackInline(
         data.job,
         `PaddleOCR timed out after ${pollCount} polls`,
         env,
+        trace,
+        startedAt,
       );
       return "fallback";
     }
-    await env.IMAGE_QUEUE.send({
-      ...data,
-      pollCount,
-    }, { delaySeconds: PADDLEOCR_POLL_DELAY_SECONDS });
+    try {
+      await env.IMAGE_QUEUE.send({
+        ...data,
+        pollCount,
+      }, { delaySeconds: PADDLEOCR_POLL_DELAY_SECONDS });
+    } catch (error) {
+      await processPaddleFallbackInline(
+        data.job,
+        `PaddleOCR retry queue failed: ${queueErrorText(error)}`,
+        env,
+        trace,
+        startedAt,
+      );
+      return "fallback";
+    }
     return "pending";
   }
-  const result = await processPaddleText(
+  await finalizePaddleText(
     data.job,
-    status.text!,
+    status.text ?? "",
     env,
     trace,
+    startedAt,
   );
-  await finalizeImageResult(data.job, result, env, trace, startedAt);
   return "finalized";
 }
 
@@ -1259,7 +1536,24 @@ async function scheduleRoundFinalizer(
   env: Env,
   delaySeconds = ROUND_INACTIVITY_SECONDS,
 ): Promise<void> {
-  await env.IMAGE_QUEUE.send(finalizer, { delaySeconds });
+  try {
+    await env.IMAGE_QUEUE.send(finalizer, { delaySeconds });
+  } catch (error) {
+    const detail = queueErrorText(error);
+    const stored = await savePendingQueueJobs(
+      env.CONTROL_DB,
+      "images",
+      [finalizer],
+      detail,
+    );
+    console.error(JSON.stringify({
+      event: "round_finalizer_deferred",
+      roundKey: finalizer.roundKey,
+      generation: finalizer.generation,
+      stored,
+      error: detail,
+    }));
+  }
 }
 
 async function registerStockRoundImage(job: ImageJob, env: Env): Promise<void> {
@@ -1396,6 +1690,11 @@ export default {
 
         if (message.attempts === 1) await recordStat(env, "received");
 
+        // Register the round only after the image job has safely reached the
+        // image queue. This avoids leaving a pending round when a queue write
+        // is deferred because the account quota is exhausted.
+        await registerStockRoundImage(job, env);
+
         const operationalState = d1StateStore(env.CONTROL_DB);
         if (await isImageProcessed(job, operationalState)) {
           await recordStat(env, "duplicates");
@@ -1432,7 +1731,7 @@ export default {
           continue;
         }
 
-        await submitPaddleJob(job, env);
+        await submitPaddleJob(job, env, trace, startedAt);
         message.ack();
       } catch (error) {
         await recordStat(env, "errors");
@@ -1456,14 +1755,16 @@ export default {
     }
   },
   async scheduled(_controller, env): Promise<void> {
-    const [stateRows, inspectionRows] = await Promise.all([
+    const [stateRows, inspectionRows, pendingQueue] = await Promise.all([
       purgeExpiredState(env.CONTROL_DB),
       purgeExpiredInspectionLogs(env.CONTROL_DB),
+      drainPendingQueueJobs(env),
     ]);
     console.log(JSON.stringify({
       event: "daily_cleanup_completed",
       stateRows,
       inspectionRows,
+      pendingQueue,
     }));
   },
 } satisfies ExportedHandler<Env, QueueJob>;

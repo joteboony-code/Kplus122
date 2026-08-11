@@ -1,12 +1,19 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   extractPaddleOcrText,
+  MAX_PADDLEOCR_POLLS,
+  PADDLEOCR_INLINE_POLLS,
   pollPaddleOcr,
   submitPaddleOcr,
 } from "../src/paddle-ocr";
 
 describe("PaddleOCR", () => {
   afterEach(() => vi.unstubAllGlobals());
+
+  it("limits polling to two inline polls and one delayed poll", () => {
+    expect(PADDLEOCR_INLINE_POLLS).toBe(2);
+    expect(MAX_PADDLEOCR_POLLS).toBe(3);
+  });
 
   it("extracts text from PaddleOCR JSONL results", () => {
     const jsonl = [

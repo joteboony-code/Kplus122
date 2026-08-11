@@ -30,4 +30,21 @@ describe("8-digit job references", () => {
     await expect(storeJobReference("G1", "U1", "1234", memoryState()))
       .rejects.toThrow("exactly 8 digits");
   });
+
+  it("resolves the TID that was active when an image was sent", async () => {
+    const state = memoryState();
+    await storeJobReference("G1", "U1", "28401904", state, 1_000);
+    await storeJobReference("G1", "U1", "28253121", state, 2_000);
+
+    expect(await getJobReference("G1", "U1", state, 1_500)).toBe("28401904");
+    expect(await getJobReference("G1", "U1", state, 2_500)).toBe("28253121");
+  });
+
+  it("keeps the latest TID behavior when no event timestamp is available", async () => {
+    const state = memoryState();
+    await storeJobReference("G1", "U1", "28401904", state);
+    await storeJobReference("G1", "U1", "28253121", state);
+
+    expect(await getJobReference("G1", "U1", state)).toBe("28253121");
+  });
 });

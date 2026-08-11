@@ -154,6 +154,17 @@ describe("receipt round state", () => {
     });
   });
 
+  it("schedules only one finalizer for images in the same generation", async () => {
+    const state = memoryState();
+    const first = { ...job("same-generation-1"), timestamp: 1_000 };
+    const second = { ...job("same-generation-2"), timestamp: 900 };
+
+    expect(await registerRoundImage(first, state, 1_000, "generation-1"))
+      .not.toBeNull();
+    expect(await registerRoundImage(second, state, 1_001, "generation-2"))
+      .toBeNull();
+  });
+
   it("uses the last image event time and keeps its Reply token for delayed Stock", async () => {
     const state = memoryState();
     const firstImage = { ...job("first"), timestamp: 1_000 };
