@@ -18,6 +18,41 @@ const PENDING_QUEUE_PREFIX = "pending-queue:v1:";
 const PENDING_QUEUE_TTL_SECONDS = 2 * 24 * 60 * 60;
 const MAX_ERROR_LENGTH = 500;
 
+function bangkokDateKey(value: number): string {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Bangkok",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date(value));
+  const part = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((item) => item.type === type)?.value ?? "";
+  return `${part("year")}-${part("month")}-${part("day")}`;
+}
+
+function queueJobTimestampMs(body: QueueJob): number | undefined {
+  if ("kind" in body) {
+    if (body.kind === "line-webhook") return body.receivedAtMs;
+    if (body.kind === "paddle-poll" || body.kind === "ocr-fallback") {
+      return body.job.timestamp;
+    }
+    // A round finalizer has no image timestamp. Its Durable Object generation
+    // check still protects it from duplicate/stale finalization.
+    return undefined;
+  }
+  return body.timestamp;
+}
+
+/** Jobs are valid only during the Bangkok calendar day in which LINE received them. */
+export function isCurrentQueueJobDay(
+  body: QueueJob,
+  now = Date.now(),
+): boolean {
+  const timestamp = queueJobTimestampMs(body);
+  if (!Number.isFinite(timestamp) || timestamp === undefined) return true;
+  return bangkokDateKey(timestamp) === bangkokDateKey(now);
+}
+
 function errorText(error: unknown): string {
   return (error instanceof Error ? error.message : String(error)).slice(
     0,
@@ -143,11 +178,16 @@ export async function listPendingQueueJobs(
       LIMIT ?`)
     .bind(`${PENDING_QUEUE_PREFIX}%`, Math.min(Math.max(limit, 1), 100))
     .all<{ key: string; value: string }>();
-  return result.results
+  const items = result.results
     .map((row) => decodeItem(row.key, row.value))
-    .filter((item): item is PendingQueueItem =>
-      item !== null && item.nextAttemptAt <= now,
-    );
+    .filter((item): item is PendingQueueItem => item !== null);
+  const expired = items.filter((item) => !isCurrentQueueJobDay(item.body, now));
+  if (expired.length > 0) {
+    await db.batch(expired.map((item) => db.prepare("DELETE FROM control_state WHERE key = ?").bind(item.key)));
+  }
+  return items.filter((item) =>
+    isCurrentQueueJobDay(item.body, now) && item.nextAttemptAt <= now,
+  );
 }
 
 export async function removePendingQueueJob(

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  isCurrentQueueJobDay,
   pendingQueueItem,
   pendingQueueKey,
 } from "../src/pending-queue-jobs";
@@ -39,5 +40,14 @@ describe("pending queue jobs", () => {
       lastError: "daily write operations limit",
       body: { messageId: "image-2", referenceCode: "28401904" },
     });
+  });
+
+  it("expires deferred images after the Bangkok calendar day ends", () => {
+    const deferred = {
+      ...job("image-3"),
+      timestamp: Date.parse("2026-07-28T16:59:59.000Z"),
+    };
+    expect(isCurrentQueueJobDay(deferred, Date.parse("2026-07-28T17:00:00.000Z"))).toBe(false);
+    expect(isCurrentQueueJobDay(deferred, Date.parse("2026-07-28T16:59:59.000Z"))).toBe(true);
   });
 });

@@ -67,6 +67,7 @@ import {
 } from "./paddle-ocr";
 import {
   deferPendingQueueJob,
+  isCurrentQueueJobDay,
   listPendingQueueJobs,
   removePendingQueueJob,
   savePendingQueueJobs,
@@ -1594,6 +1595,18 @@ async function processRoundFinalizer(
     return;
   }
 
+  // A round that crossed the Bangkok calendar boundary is no longer useful
+  // to the technician. Complete its state without sending a late reply.
+  if (result.job && !isCurrentQueueJobDay(result.job)) {
+    console.log(JSON.stringify({
+      event: "round_finalizer_expired",
+      roundKey: finalizer.roundKey,
+      messageId: result.job.messageId,
+    }));
+    await coordinator.completeFinalization(finalizer);
+    return;
+  }
+
   try {
     if (result.job) {
       const delivery = await replyStockFlexOnce(
@@ -1632,6 +1645,16 @@ export default {
   async queue(batch, env): Promise<void> {
     for (const message of batch.messages) {
       const body = message.body;
+      if (!isCurrentQueueJobDay(body)) {
+        console.log(JSON.stringify({
+          event: "queue_job_expired",
+          kind: "kind" in body ? body.kind : "image",
+          messageId: "messageId" in body ? body.messageId :
+            "job" in body ? body.job.messageId : undefined,
+        }));
+        message.ack();
+        continue;
+      }
       if (isLineWebhookQueueJob(body)) {
         try {
           await processQueuedWebhookEvents(body.events, env);
