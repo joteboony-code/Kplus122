@@ -1,7 +1,7 @@
 import type { StateStore } from "./state-store";
 import type { ImageJob, RoundFinalizeJob } from "./types";
 
-export const ROUND_INACTIVITY_SECONDS = 20;
+export const ROUND_INACTIVITY_SECONDS = 30;
 // Keep the round state for at least as long as a technician's active Tid.
 // This prevents a later photo for the same Tid from receiving another Stock card.
 export const ROUND_STATE_TTL_SECONDS = 30 * 60;
@@ -23,6 +23,9 @@ interface ReceiptRoundState {
   processedMessageIds: string[];
   pendingMessageIds?: string[];
   latestJob?: ImageJob;
+  imageSetId?: string;
+  imageSetTotal?: number;
+  imageSetMessageIds?: string[];
   evidence?: RoundEvidence;
   completedAt?: number;
   passOwnerMessageId?: string;
@@ -102,6 +105,15 @@ function parseRoundState(value: string | null): ReceiptRoundState | null {
   }
 }
 
+function imageSetIsComplete(state: ReceiptRoundState | null): boolean {
+  return Boolean(
+    state?.imageSetId &&
+    Number.isInteger(state.imageSetTotal) &&
+    state.imageSetTotal! > 0 &&
+    (state.imageSetMessageIds?.length ?? 0) >= state.imageSetTotal!,
+  );
+}
+
 export async function recordRoundActivity(
   job: ImageJob,
   evidence: RoundEvidence | undefined,
@@ -129,10 +141,15 @@ export async function recordRoundActivity(
     ? active.processedMessageIds
     : [...(active?.processedMessageIds ?? []), job.messageId];
   const next: ReceiptRoundState = {
+    ...active,
     generation,
     updatedAt: now,
     processedMessageIds,
+    pendingMessageIds: active?.pendingMessageIds,
     latestJob: job,
+    imageSetId: active?.imageSetId,
+    imageSetTotal: active?.imageSetTotal,
+    imageSetMessageIds: active?.imageSetMessageIds,
     evidence: betterEvidence(active?.evidence, evidence),
     finalizerScheduledGeneration: generation,
   };
@@ -169,6 +186,32 @@ export async function registerRoundImage(
     (job.timestamp ?? now) >= (active.latestJob.timestamp ?? active.updatedAt);
   const nextGeneration = isNewer ? generation : active!.generation;
   const shouldSchedule = active?.finalizerScheduledGeneration !== nextGeneration;
+  const hasImageSet = Boolean(
+    job.imageSetId &&
+    Number.isInteger(job.imageSetTotal) &&
+    job.imageSetTotal! > 0,
+  );
+  let imageSetId = active?.imageSetId;
+  let imageSetTotal = active?.imageSetTotal;
+  let imageSetMessageIds = active?.imageSetMessageIds ?? [];
+  if (hasImageSet) {
+    if (imageSetId !== job.imageSetId) {
+      imageSetId = job.imageSetId;
+      imageSetTotal = job.imageSetTotal;
+      imageSetMessageIds = [];
+    } else {
+      imageSetTotal = Math.max(imageSetTotal ?? 0, job.imageSetTotal!);
+    }
+    if (!imageSetMessageIds.includes(job.messageId)) {
+      imageSetMessageIds = [...imageSetMessageIds, job.messageId].slice(-100);
+    }
+  } else if (active?.imageSetId) {
+    // A standalone image starts a new debounce window; it must not be counted
+    // as part of a previous LINE album.
+    imageSetId = undefined;
+    imageSetTotal = undefined;
+    imageSetMessageIds = [];
+  }
   await state.put(roundKey, JSON.stringify({
     ...active,
     generation: nextGeneration,
@@ -176,6 +219,9 @@ export async function registerRoundImage(
     processedMessageIds: active?.processedMessageIds ?? [],
     pendingMessageIds,
     latestJob: isNewer ? job : active!.latestJob,
+    imageSetId,
+    imageSetTotal,
+    imageSetMessageIds,
     finalizerScheduledGeneration: nextGeneration,
   } satisfies ReceiptRoundState), {
     expirationTtl: ROUND_STATE_TTL_SECONDS,
@@ -488,7 +534,10 @@ export async function finalizeRound(
 
   const elapsedMs = now - current.updatedAt;
   const inactivityMs = ROUND_INACTIVITY_SECONDS * 1000;
-  if (current.pendingMessageIds?.length || elapsedMs < inactivityMs) {
+  if (
+    current.pendingMessageIds?.length ||
+    (!imageSetIsComplete(current) && elapsedMs < inactivityMs)
+  ) {
     return {
       status: "waiting",
       retryAfterSeconds: current.pendingMessageIds?.length
