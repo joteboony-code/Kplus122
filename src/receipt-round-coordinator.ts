@@ -7,16 +7,20 @@ import {
   completeRoundFinalization,
   completeRoundAfterPass,
   completeRoundImage,
+  completeRoundReplyToken,
   completeRoundStock,
   finalizeRound,
   registerRoundImage,
+  recordRoundReplyToken,
   recordRoundActivity,
   releaseRoundFailure,
   releaseRoundFinalization,
   releaseRoundPass,
   releaseRoundStock,
+  selectLatestRoundReplyToken,
   type RoundEvidence,
   type RoundFinalization,
+  type RoundReplyTokenSelection,
 } from "./receipt-round";
 import type { StateStore } from "./state-store";
 import type { ImageJob, RoundFinalizeJob } from "./types";
@@ -78,6 +82,21 @@ export class ReceiptRoundCoordinator extends DurableObject<Env> {
   async completeImage(job: ImageJob): Promise<void> {
     await this.ctx.storage.transaction((transaction) =>
       completeRoundImage(job, this.transactionState(transaction)));
+  }
+
+  async recordReplyToken(job: ImageJob): Promise<void> {
+    await this.ctx.storage.transaction((transaction) =>
+      recordRoundReplyToken(job, this.transactionState(transaction)));
+  }
+
+  async selectReplyToken(job: ImageJob): Promise<RoundReplyTokenSelection | null> {
+    return this.ctx.storage.transaction((transaction) =>
+      selectLatestRoundReplyToken(job, this.transactionState(transaction)));
+  }
+
+  async completeReplyToken(job: ImageJob, sourceMessageId: string): Promise<void> {
+    await this.ctx.storage.transaction((transaction) =>
+      completeRoundReplyToken(job, sourceMessageId, this.transactionState(transaction)));
   }
 
   async completeAfterPass(job: ImageJob): Promise<void> {

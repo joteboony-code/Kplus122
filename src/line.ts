@@ -147,7 +147,10 @@ export async function verifyLineSignature(
   }
 }
 
-export function imageJobFromEvent(event: LineWebhookEvent): ImageJob | null {
+export function imageJobFromEvent(
+  event: LineWebhookEvent,
+  replyTokenReceivedAtMs = Date.now(),
+): ImageJob | null {
   if (
     event.type !== "message" ||
     event.message?.type !== "image" ||
@@ -171,6 +174,7 @@ export function imageJobFromEvent(event: LineWebhookEvent): ImageJob | null {
     sourceType: event.source?.type,
     senderUserId: event.source?.userId,
     timestamp: event.timestamp,
+    replyTokenReceivedAtMs,
     imageSetId: event.message.imageSet?.id,
     imageSetIndex: event.message.imageSet?.index,
     imageSetTotal: event.message.imageSet?.total,

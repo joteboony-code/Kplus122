@@ -17,6 +17,16 @@ export interface RoundEvidence {
   job: ImageJob;
 }
 
+export interface RoundReplyTokenSelection {
+  messageId: string;
+  replyToken: string;
+  receivedAtMs: number;
+}
+
+interface RoundReplyToken extends RoundReplyTokenSelection {
+  usedAt?: number;
+}
+
 interface ReceiptRoundState {
   generation: string;
   updatedAt: number;
@@ -38,6 +48,7 @@ interface ReceiptRoundState {
   stockCompletedAt?: number;
   finalizationClaimedAt?: number;
   finalizerScheduledGeneration?: string;
+  replyTokens?: RoundReplyToken[];
 }
 
 export interface RoundFinalization {
@@ -112,6 +123,99 @@ function imageSetIsComplete(state: ReceiptRoundState | null): boolean {
     state.imageSetTotal! > 0 &&
     (state.imageSetMessageIds?.length ?? 0) >= state.imageSetTotal!,
   );
+}
+
+function replyTokenReceivedAt(job: ImageJob, now: number): number {
+  const receivedAtMs = job.replyTokenReceivedAtMs;
+  return typeof receivedAtMs === "number" && Number.isFinite(receivedAtMs) && receivedAtMs > 0
+    ? receivedAtMs
+    : now;
+}
+
+function addReplyToken(
+  state: ReceiptRoundState,
+  job: ImageJob,
+  now: number,
+): ReceiptRoundState {
+  const receivedAtMs = replyTokenReceivedAt(job, now);
+  const currentTokens = state.replyTokens ?? [];
+  const existingIndex = currentTokens.findIndex((token) => token.messageId === job.messageId);
+  const existing = existingIndex >= 0 ? currentTokens[existingIndex] : undefined;
+  const nextToken: RoundReplyToken = {
+    messageId: job.messageId,
+    replyToken: job.replyToken,
+    receivedAtMs,
+    ...(existing?.usedAt !== undefined ? { usedAt: existing.usedAt } : {}),
+  };
+  const nextTokens = existingIndex >= 0
+    ? currentTokens.map((token, index) => index === existingIndex ? nextToken : token)
+    : [...currentTokens, nextToken].slice(-100);
+  return { ...state, replyTokens: nextTokens };
+}
+
+/** Record every token as soon as the webhook arrives, before image processing starts. */
+export async function recordRoundReplyToken(
+  job: ImageJob,
+  state: StateStore,
+  now = Date.now(),
+): Promise<void> {
+  const roundKey = receiptRoundKey(job);
+  if (!roundKey) return;
+  const current = parseRoundState(await state.get(roundKey));
+  if (
+    current?.stockCompletedAt !== undefined ||
+    (current?.completedAt !== undefined &&
+      now - current.completedAt < ROUND_COMPLETED_SUPPRESSION_SECONDS * 1000)
+  ) {
+    return;
+  }
+  const base: ReceiptRoundState = current ?? {
+    generation: crypto.randomUUID(),
+    updatedAt: now,
+    processedMessageIds: [],
+  };
+  const next = addReplyToken(base, job, now);
+  await state.put(roundKey, JSON.stringify({
+    ...next,
+    updatedAt: Math.max(next.updatedAt, now),
+  } satisfies ReceiptRoundState), {
+    expirationTtl: ROUND_STATE_TTL_SECONDS,
+  });
+}
+
+export async function selectLatestRoundReplyToken(
+  job: ImageJob,
+  state: StateStore,
+): Promise<RoundReplyTokenSelection | null> {
+  const roundKey = receiptRoundKey(job);
+  if (!roundKey) return null;
+  const current = parseRoundState(await state.get(roundKey));
+  const available = (current?.replyTokens ?? []).filter((token) => token.usedAt === undefined);
+  if (available.length === 0) return null;
+  return available.reduce((latest, token) =>
+    token.receivedAtMs >= latest.receivedAtMs ? token : latest
+  );
+}
+
+export async function completeRoundReplyToken(
+  job: ImageJob,
+  sourceMessageId: string,
+  state: StateStore,
+  now = Date.now(),
+): Promise<void> {
+  const roundKey = receiptRoundKey(job);
+  if (!roundKey) return;
+  const current = parseRoundState(await state.get(roundKey));
+  if (!current?.replyTokens) return;
+  if (!current.replyTokens.some((token) => token.messageId === sourceMessageId)) return;
+  await state.put(roundKey, JSON.stringify({
+    ...current,
+    replyTokens: current.replyTokens.map((token) =>
+      token.messageId === sourceMessageId ? { ...token, usedAt: now } : token
+    ),
+  } satisfies ReceiptRoundState), {
+    expirationTtl: ROUND_STATE_TTL_SECONDS,
+  });
 }
 
 export async function recordRoundActivity(
@@ -212,7 +316,7 @@ export async function registerRoundImage(
     imageSetTotal = undefined;
     imageSetMessageIds = [];
   }
-  await state.put(roundKey, JSON.stringify({
+  const nextState = addReplyToken({
     ...active,
     generation: nextGeneration,
     updatedAt: Math.max(active?.updatedAt ?? Number.NEGATIVE_INFINITY, now),
@@ -223,7 +327,8 @@ export async function registerRoundImage(
     imageSetTotal,
     imageSetMessageIds,
     finalizerScheduledGeneration: nextGeneration,
-  } satisfies ReceiptRoundState), {
+  } satisfies ReceiptRoundState, job, now);
+  await state.put(roundKey, JSON.stringify(nextState), {
     expirationTtl: ROUND_STATE_TTL_SECONDS,
   });
   return shouldSchedule
@@ -576,6 +681,7 @@ export async function completeRoundFinalization(
     finalizerScheduledGeneration: _scheduledGeneration,
     evidence: _evidence,
     latestJob: _latestJob,
+    replyTokens: _replyTokens,
     ...next
   } = current;
   await state.put(job.roundKey, JSON.stringify({

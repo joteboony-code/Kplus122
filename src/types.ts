@@ -46,6 +46,8 @@ export interface LineReplyContext {
 export interface ImageJob extends LineReplyContext {
   messageId: string;
   quoteToken?: string;
+  /** Timestamp when LINE delivered the webhook, used for Reply-token ordering. */
+  replyTokenReceivedAtMs?: number;
   imageSetId?: string;
   imageSetIndex?: number;
   imageSetTotal?: number;

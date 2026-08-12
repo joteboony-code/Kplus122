@@ -53,6 +53,7 @@ import {
   receiptRoundKey,
   ROUND_INACTIVITY_SECONDS,
   type RoundEvidence,
+  type RoundReplyTokenSelection,
 } from "./receipt-round";
 export { ReceiptRoundCoordinator } from "./receipt-round-coordinator";
 export { OperationalCounterCoordinator } from "./operational-counters";
@@ -506,6 +507,83 @@ async function completeStockFlex(job: ImageJob, env: Env): Promise<void> {
   await env.RECEIPT_ROUNDS.getByName(roundKey).completeStock(job);
 }
 
+async function recordReplyToken(job: ImageJob, env: Env): Promise<void> {
+  const roundKey = receiptRoundKey(job);
+  if (!roundKey) return;
+  try {
+    await env.RECEIPT_ROUNDS.getByName(roundKey).recordReplyToken(job);
+  } catch (error) {
+    console.error(JSON.stringify({
+      event: "reply_token_record_failed",
+      messageId: job.messageId,
+      referenceCode: job.referenceCode,
+      error: error instanceof Error ? error.message : "unknown error",
+    }));
+  }
+}
+
+async function recordReplyTokens(jobs: ImageJob[], env: Env): Promise<void> {
+  for (const job of jobs) await recordReplyToken(job, env);
+}
+
+async function selectReplyToken(
+  job: ImageJob,
+  env: Env,
+): Promise<RoundReplyTokenSelection | null> {
+  const roundKey = receiptRoundKey(job);
+  if (!roundKey) return null;
+  try {
+    const selected = await env.RECEIPT_ROUNDS.getByName(roundKey).selectReplyToken(job);
+    if (!selected) return null;
+    const ageMs = Math.max(0, Date.now() - selected.receivedAtMs);
+    console.log(JSON.stringify({
+      event: "reply_token_selected",
+      messageId: job.messageId,
+      sourceMessageId: selected.messageId,
+      referenceCode: job.referenceCode,
+      ageMs,
+    }));
+    if (ageMs >= 50_000) {
+      console.warn(JSON.stringify({
+        event: "reply_token_age_warning",
+        messageId: job.messageId,
+        sourceMessageId: selected.messageId,
+        referenceCode: job.referenceCode,
+        ageMs,
+      }));
+    }
+    return selected;
+  } catch (error) {
+    console.error(JSON.stringify({
+      event: "reply_token_select_failed",
+      messageId: job.messageId,
+      referenceCode: job.referenceCode,
+      error: error instanceof Error ? error.message : "unknown error",
+    }));
+    return null;
+  }
+}
+
+async function markReplyTokenUsed(
+  job: ImageJob,
+  sourceMessageId: string | undefined,
+  env: Env,
+): Promise<void> {
+  const roundKey = receiptRoundKey(job);
+  if (!roundKey || !sourceMessageId) return;
+  try {
+    await env.RECEIPT_ROUNDS.getByName(roundKey).completeReplyToken(job, sourceMessageId);
+  } catch (error) {
+    console.error(JSON.stringify({
+      event: "reply_token_mark_used_failed",
+      messageId: job.messageId,
+      sourceMessageId,
+      referenceCode: job.referenceCode,
+      error: error instanceof Error ? error.message : "unknown error",
+    }));
+  }
+}
+
 async function replyStockFlexOnce(
   job: ImageJob,
   env: Env,
@@ -515,13 +593,18 @@ async function replyStockFlexOnce(
   if (!includeStock) return "suppressed";
 
   trace.lineDeliveryStatus = "pending";
+  const selectedReply = await selectReplyToken(job, env);
+  const replyJob = selectedReply
+    ? { ...job, replyToken: selectedReply.replyToken }
+    : job;
   try {
     const sent = await sendReplyMessages(
-      job,
+      replyJob,
       [stockFlexMessage(job.referenceCode)],
       env.LINE_CHANNEL_ACCESS_TOKEN,
     );
     if (!sent) throw new Error("LINE Stock Flex reply failed");
+    await markReplyTokenUsed(job, selectedReply?.messageId, env);
     await completeStockFlex(job, env);
     trace.lineDeliveryStatus = "sent";
     trace.lineDeliveryMethod = "reply";
@@ -573,15 +656,20 @@ async function replyKplusSuccess(
   let method: LineDeliveryMethod | null = null;
   const includeStock = await claimStockFlex(job, env);
   const serviceAlert = await prepareTechnicianServiceAlert(job, env);
+  const selectedReply = await selectReplyToken(job, env);
+  const replyJob = selectedReply
+    ? { ...job, replyToken: selectedReply.replyToken }
+    : job;
   try {
     method = await sendInspectionResultWithMethod(
-      job,
+      replyJob,
       formatKplusSuccess(amount),
       env.LINE_CHANNEL_ACCESS_TOKEN,
       serviceAlert?.messages ?? [],
       includeStock,
     );
     if (!method) throw new Error("LINE inspection result delivery failed");
+    await markReplyTokenUsed(job, selectedReply?.messageId, env);
     trace.lineDeliveryStatus = "sent";
     trace.lineDeliveryMethod = method;
   } catch (error) {
@@ -643,15 +731,20 @@ async function replyKplusFailure(
   trace.lineDeliveryStatus = "pending";
   const includeStock = await claimStockFlex(job, env);
   const serviceAlert = await prepareTechnicianServiceAlert(job, env);
+  const selectedReply = await selectReplyToken(job, env);
+  const replyJob = selectedReply
+    ? { ...job, replyToken: selectedReply.replyToken }
+    : job;
   try {
     const method = await sendInspectionResultWithMethod(
-      job,
+      replyJob,
       text,
       env.LINE_CHANNEL_ACCESS_TOKEN,
       serviceAlert?.messages ?? [],
       includeStock,
     );
     if (method !== "reply") throw new Error("LINE inspection reply failed");
+    await markReplyTokenUsed(job, selectedReply?.messageId, env);
     trace.lineDeliveryStatus = "sent";
     trace.lineDeliveryMethod = "reply";
   } catch (error) {
@@ -686,6 +779,7 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
   if (!signature) return new Response("Missing signature", { status: 401 });
 
   const body = await request.arrayBuffer();
+  const receivedAtMs = Date.now();
   if (!(await verifyLineSignature(body, signature, env.LINE_CHANNEL_SECRET))) {
     return new Response("Invalid signature", { status: 401 });
   }
@@ -725,7 +819,7 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
       continue;
     }
 
-    const imageJob = imageJobFromEvent(event);
+    const imageJob = imageJobFromEvent(event, receivedAtMs);
     if (imageJob) {
       const scope = conversationAndSenderFromEvent(event);
       if (scope) {
@@ -758,6 +852,9 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
       }));
       return Response.json({ accepted: imageJobs.length, queued: 0, deferred: 0 });
     }
+    // Save all Reply tokens before queueing so a delayed image cannot make us
+    // fall back to an older token from the same Tid.
+    await recordReplyTokens(imageJobs, env);
     let enqueueResult: { queued: number; deferred: number };
     try {
       enqueueResult = await enqueueImageJobs(imageJobs, env);
@@ -794,6 +891,7 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
 async function processQueuedWebhookEvents(
   events: LineWebhookEvent[],
   env: Env,
+  receivedAtMs = Date.now(),
 ): Promise<void> {
   if (!(await isProcessingEnabled(
     env.CONTROL_DB,
@@ -810,7 +908,7 @@ async function processQueuedWebhookEvents(
   const operationalState = d1StateStore(env.CONTROL_DB);
   const jobs: ImageJob[] = [];
   for (const event of events) {
-    const job = imageJobFromEvent(event);
+    const job = imageJobFromEvent(event, receivedAtMs);
     if (!job) continue;
     const scope = conversationAndSenderFromEvent(event);
     if (scope && !job.referenceCode) {
@@ -824,6 +922,7 @@ async function processQueuedWebhookEvents(
     jobs.push(job);
   }
   if (jobs.length > 0) {
+    await recordReplyTokens(jobs, env);
     await enqueueImageJobs(jobs, env);
   }
 }
@@ -1657,7 +1756,7 @@ export default {
       }
       if (isLineWebhookQueueJob(body)) {
         try {
-          await processQueuedWebhookEvents(body.events, env);
+          await processQueuedWebhookEvents(body.events, env, body.receivedAtMs);
           message.ack();
         } catch (error) {
           console.error(JSON.stringify({

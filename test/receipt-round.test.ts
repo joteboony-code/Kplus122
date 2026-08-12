@@ -8,11 +8,14 @@ import {
   completeRoundFinalization,
   completeRoundAfterPass,
   completeRoundImage,
+  completeRoundReplyToken,
   completeRoundStock,
   finalizeRound,
   registerRoundImage,
   receiptRoundKey,
   recordRoundActivity,
+  recordRoundReplyToken,
+  selectLatestRoundReplyToken,
   releaseRoundFinalization,
   releaseRoundFailure,
   releaseRoundPass,
@@ -151,6 +154,47 @@ describe("receipt round state", () => {
     expect(await finalizeRound(finalizer!, state, 35_000)).toMatchObject({
       status: "finalized",
       job: lastImage,
+    });
+  });
+
+  it("selects the newest unused Reply token for the same Tid and never crosses Tids", async () => {
+    const state = memoryState();
+    const first = {
+      ...job("first"),
+      referenceCode: "28401904",
+      replyTokenReceivedAtMs: 1_000,
+    };
+    const latest = {
+      ...job("latest"),
+      referenceCode: "28401904",
+      replyTokenReceivedAtMs: 2_000,
+    };
+    const otherTid = {
+      ...job("other-tid"),
+      referenceCode: "28253121",
+      replyTokenReceivedAtMs: 3_000,
+    };
+
+    await recordRoundReplyToken(first, state);
+    await recordRoundReplyToken(latest, state);
+    await recordRoundReplyToken(otherTid, state);
+
+    expect(await selectLatestRoundReplyToken(latest, state)).toEqual({
+      messageId: "latest",
+      replyToken: "reply-latest",
+      receivedAtMs: 2_000,
+    });
+
+    await completeRoundReplyToken(latest, "latest", state, 4_000);
+    expect(await selectLatestRoundReplyToken(first, state)).toEqual({
+      messageId: "first",
+      replyToken: "reply-first",
+      receivedAtMs: 1_000,
+    });
+    expect(await selectLatestRoundReplyToken(otherTid, state)).toEqual({
+      messageId: "other-tid",
+      replyToken: "reply-other-tid",
+      receivedAtMs: 3_000,
     });
   });
 
