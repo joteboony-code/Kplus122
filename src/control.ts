@@ -383,6 +383,9 @@ function logCards(logs: InspectionLogRow[]): string {
             : '<p>รายการนี้ไม่มีข้อความ PaddleOCR ที่บันทึกไว้</p>'
         }</section>`
       : "";
+    const evidence = log.evidence_json?.trim()
+      ? `<details class="evidence-detail"><summary>หลักฐานแบบย่อ</summary><pre>${escapeHtml(log.evidence_json)}</pre></details>`
+      : "";
     return `<article class="log-row ${escapeHtml(log.outcome)}">
       <div class="log-main">
         <b class="outcome-badge"><i>${outcomeIcon}</i>${outcomeLabel}</b>
@@ -396,7 +399,7 @@ function logCards(logs: InspectionLogRow[]): string {
         <span class="delivery-chip ${deliveryState.css}">${deliveryState.text}</span>
         <div class="log-meta"><time>${escapeHtml(time)}</time><span>${log.processing_ms}ms${log.queue_delay_ms === null ? "" : ` · รอคิว ${log.queue_delay_ms}ms`}</span></div>
       </div>
-      <details class="log-more"><summary>รายละเอียด</summary><div>เส้นทาง: ${escapeHtml(log.provider_chain ?? "ไม่เรียก OCR")} · ขั้นตอน: ${escapeHtml(log.stage ?? "-")}${timing ? ` · ${escapeHtml(timing)}` : ""}${log.error ? ` · ${escapeHtml(log.error)}` : ""}</div>${paddleResult}</details>
+      <details class="log-more"><summary>รายละเอียด</summary><div>เส้นทาง: ${escapeHtml(log.provider_chain ?? "ไม่เรียก OCR")} · ขั้นตอน: ${escapeHtml(log.stage ?? "-")}${timing ? ` · ${escapeHtml(timing)}` : ""}${log.error ? ` · ${escapeHtml(log.error)}` : ""}${log.image_set_id ? ` · ชุดรูป ${escapeHtml(String(log.image_set_index ?? "?"))}/${escapeHtml(String(log.image_set_total ?? "?"))}` : ""}</div>${evidence}${paddleResult}</details>
     </article>`;
   }).join("");
 }

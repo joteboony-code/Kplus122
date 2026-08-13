@@ -35,6 +35,10 @@ export interface InspectionLogRow {
   line_delivery_status: LineDeliveryStatus;
   line_delivery_method: LineDeliveryMethod | null;
   line_delivery_updated_at: number | null;
+  image_set_id: string | null;
+  image_set_index: number | null;
+  image_set_total: number | null;
+  evidence_json: string | null;
 }
 
 function limited(value: string | undefined, length = 500): string | null {
@@ -50,14 +54,30 @@ export async function recordInspectionLog(
   error?: string,
 ): Promise<void> {
   const now = Date.now();
+  const evidence = JSON.stringify({
+    tid: job.referenceCode ?? null,
+    outcome,
+    providers: trace.providers.slice(0, 8),
+    kplus: trace.hasKplus ?? null,
+    settlement: trace.hasSettlement ?? null,
+    amounts: (trace.observedAmounts ?? []).slice(0, 8),
+    imageSet: job.imageSetId
+      ? {
+          id: job.imageSetId,
+          index: job.imageSetIndex ?? null,
+          total: job.imageSetTotal ?? null,
+        }
+      : null,
+  });
   await db.batch([
     db.prepare(`INSERT INTO inspection_logs (
       webhook_event_id, message_id, conversation_id, sender_user_id,
       reference_code, outcome, stage, provider_chain, provider_timings,
       paddle_ocr_text, observed_amounts, has_kplus, has_settlement, queue_delay_ms,
       processing_ms, error, line_delivery_status, line_delivery_method,
-      line_delivery_updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      line_delivery_updated_at, image_set_id, image_set_index, image_set_total,
+      evidence_json
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
       .bind(
         job.webhookEventId,
         job.messageId,
@@ -80,6 +100,10 @@ export async function recordInspectionLog(
         trace.lineDeliveryStatus && trace.lineDeliveryStatus !== "not_applicable"
           ? Math.floor(now / 1000)
           : null,
+        job.imageSetId ?? null,
+        job.imageSetIndex ?? null,
+        job.imageSetTotal ?? null,
+        evidence.slice(0, 2_000),
       ),
     db.prepare("DELETE FROM inspection_logs WHERE created_at < unixepoch() - ?")
       .bind(AUDIT_RETENTION_SECONDS),
@@ -95,7 +119,8 @@ export async function listInspectionLogs(
       id, created_at, reference_code, outcome, stage, provider_chain,
       provider_timings, paddle_ocr_text, observed_amounts, has_kplus, has_settlement,
       queue_delay_ms, processing_ms, error, line_delivery_status,
-      line_delivery_method, line_delivery_updated_at
+      line_delivery_method, line_delivery_updated_at,
+      image_set_id, image_set_index, image_set_total, evidence_json
     FROM inspection_logs
     ORDER BY id DESC
     LIMIT ?`)

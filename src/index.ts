@@ -40,6 +40,11 @@ import {
 } from "./audit-log";
 import { getJobReference, storeJobReference } from "./job-reference";
 import {
+  bindImageSetReference,
+  getImageSetReference,
+  purgeExpiredImageSetBindings,
+} from "./image-set-binding";
+import {
   conversationAndSenderFromEvent,
   downloadLineImage,
   imageJobFromEvent,
@@ -52,7 +57,13 @@ import {
   type ServiceLookContext,
 } from "./line";
 import { hasRecentPass, recordRecentPass } from "./reply-state";
-import { isImageProcessed, markImageProcessed } from "./processing-state";
+import {
+  claimImageQueue,
+  isImageProcessed,
+  markImageProcessed,
+  markImageQueued,
+  releaseImageQueueClaim,
+} from "./processing-state";
 import {
   receiptRoundKey,
   FAILED_RESULT_WAIT_SECONDS,
@@ -462,14 +473,20 @@ async function recordQueueStatSafely(
 async function enqueueImageJobs(
   jobs: ImageJob[],
   env: Env,
+  queueState?: ReturnType<typeof d1StateStore>,
 ): Promise<{ queued: number; deferred: number }> {
   let queued = 0;
   let deferred = 0;
   for (let index = 0; index < jobs.length; index += 100) {
     const chunk = jobs.slice(index, index + 100);
     const result = await enqueueQueueBodiesSafely("images", chunk, env);
-    if (result === "queued") queued += chunk.length;
-    else deferred += chunk.length;
+    if (result === "queued") {
+      queued += chunk.length;
+      if (queueState) await Promise.all(chunk.map((job) => markImageQueued(job, queueState)));
+    } else {
+      deferred += chunk.length;
+      if (queueState) await Promise.all(chunk.map((job) => markImageQueued(job, queueState)));
+    }
   }
   return { queued, deferred };
 }
@@ -853,12 +870,37 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
     if (imageJob) {
       const scope = conversationAndSenderFromEvent(event);
       if (scope) {
-        imageJob.referenceCode = await getJobReference(
+        const boundReference = imageJob.imageSetId
+          ? await getImageSetReference(
+            env.CONTROL_DB,
+            scope.conversationId,
+            scope.senderId,
+            imageJob.imageSetId,
+          )
+          : undefined;
+        const referenceCode = boundReference ?? await getJobReference(
           scope.conversationId,
           scope.senderId,
           operationalState,
           imageJob.timestamp,
         );
+        imageJob.referenceCode = imageJob.imageSetId && referenceCode && !boundReference
+          ? await bindImageSetReference(
+            env.CONTROL_DB,
+            scope.conversationId,
+            scope.senderId,
+            imageJob.imageSetId,
+            referenceCode,
+          )
+          : referenceCode;
+        if (imageJob.imageSetId && imageJob.referenceCode) {
+          console.log(JSON.stringify({
+            event: "image_set_tid_bound",
+            imageSetId: imageJob.imageSetId,
+            messageId: imageJob.messageId,
+            referenceCode: imageJob.referenceCode,
+          }));
+        }
       }
       console.log(JSON.stringify({
         event: "image_job_reference_bound",
@@ -882,18 +924,25 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
       }));
       return Response.json({ accepted: imageJobs.length, queued: 0, deferred: 0 });
     }
+    const queueState = operationalState;
+    const queueJobs: ImageJob[] = [];
+    for (const job of imageJobs) {
+      if (await claimImageQueue(job, queueState)) queueJobs.push(job);
+    }
+    const deduplicated = imageJobs.length - queueJobs.length;
     // Save all Reply tokens before queueing so a delayed image cannot make us
     // fall back to an older token from the same Tid.
-    await recordReplyTokens(imageJobs, env);
+    await recordReplyTokens(queueJobs, env);
     let enqueueResult: { queued: number; deferred: number };
     try {
-      enqueueResult = await enqueueImageJobs(imageJobs, env);
+      enqueueResult = await enqueueImageJobs(queueJobs, env, queueState);
     } catch (error) {
       console.error(JSON.stringify({
         event: "image_queue_enqueue_failed",
-        imageCount: imageJobs.length,
+        imageCount: queueJobs.length,
         error: queueErrorText(error),
       }));
+      await Promise.all(queueJobs.map((job) => releaseImageQueueClaim(job, queueState)));
       return Response.json({
         accepted: 0,
         queued: 0,
@@ -912,6 +961,7 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
       accepted: imageJobs.length,
       queued: enqueueResult.queued,
       deferred: enqueueResult.deferred,
+      deduplicated,
     });
   }
 
@@ -941,19 +991,41 @@ async function processQueuedWebhookEvents(
     const job = imageJobFromEvent(event, receivedAtMs);
     if (!job) continue;
     const scope = conversationAndSenderFromEvent(event);
-    if (scope && !job.referenceCode) {
-      job.referenceCode = await getJobReference(
+    if (scope) {
+      const boundReference = job.imageSetId
+        ? await getImageSetReference(
+          env.CONTROL_DB,
+          scope.conversationId,
+          scope.senderId,
+          job.imageSetId,
+        )
+        : undefined;
+      const referenceCode = boundReference ?? await getJobReference(
         scope.conversationId,
         scope.senderId,
         operationalState,
         job.timestamp,
       );
+      job.referenceCode = job.imageSetId && referenceCode && !boundReference
+        ? await bindImageSetReference(
+          env.CONTROL_DB,
+          scope.conversationId,
+          scope.senderId,
+          job.imageSetId,
+          referenceCode,
+        )
+        : referenceCode;
     }
     jobs.push(job);
   }
   if (jobs.length > 0) {
-    await recordReplyTokens(jobs, env);
-    await enqueueImageJobs(jobs, env);
+    const queueState = operationalState;
+    const queueJobs: ImageJob[] = [];
+    for (const job of jobs) {
+      if (await claimImageQueue(job, queueState)) queueJobs.push(job);
+    }
+    await recordReplyTokens(queueJobs, env);
+    await enqueueImageJobs(queueJobs, env, queueState);
   }
 }
 
@@ -2076,14 +2148,16 @@ export default {
     await recordQueueStatSafely(env, "queueDeletes", queueDeletes);
   },
   async scheduled(_controller, env): Promise<void> {
-    const [stateRows, inspectionRows, pendingQueue] = await Promise.all([
+    const [stateRows, imageSetBindingRows, inspectionRows, pendingQueue] = await Promise.all([
       purgeExpiredState(env.CONTROL_DB),
+      purgeExpiredImageSetBindings(env.CONTROL_DB),
       purgeExpiredInspectionLogs(env.CONTROL_DB),
       drainPendingQueueJobs(env),
     ]);
     console.log(JSON.stringify({
       event: "daily_cleanup_completed",
       stateRows,
+      imageSetBindingRows,
       inspectionRows,
       pendingQueue,
     }));
