@@ -420,7 +420,7 @@ describe("receipt decision", () => {
 
     expect(decision.status).toBe("fail");
     expect(formatDecision(inspection, decision)).toBe([
-      "❌ ตรวจสอบไม่ผ่าน: สลิป KPLUS",
+      "❌ ตรวจสอบไม่พบยอด 1.22: สลิป KPLUS",
       "ยอดที่อ่านได้: 2.22 บาท",
       "สาเหตุ: ไม่พบยอด 1.22 หรือ -1.22 บาท",
       "หาก Test ผ่าน Link POS อย่าลืมลง Remark",

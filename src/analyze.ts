@@ -351,7 +351,7 @@ export function formatDecision(
     ? inspection.labeledAmounts
     : inspection.observedAmounts;
   const lines = [
-    "❌ ตรวจสอบไม่ผ่าน: สลิป KPLUS",
+    "❌ ตรวจสอบไม่พบยอด 1.22: สลิป KPLUS",
     `ยอดที่อ่านได้: ${displayAmounts.length > 0 ? `${displayAmounts.map((amount) => amount.toFixed(2)).join(", ")} บาท` : "อ่านยอดไม่ได้"}`,
     `สาเหตุ: ${decision.failures.join(", ")}`,
   ];
