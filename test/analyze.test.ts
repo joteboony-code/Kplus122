@@ -422,7 +422,6 @@ describe("receipt decision", () => {
     expect(formatDecision(inspection, decision)).toBe([
       "❌ ตรวจสอบไม่พบยอด 1.22: พบ KPLUS + SETTLEMENT แต่ยอดไม่ตรง",
       "ยอดที่อ่านได้: 2.22 บาท",
-      "สาเหตุ: ไม่พบยอด 1.22 หรือ -1.22 บาท",
       "หาก Test ผ่าน Link POS อย่าลืมลง Remark",
     ].join("\n"));
   });

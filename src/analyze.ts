@@ -356,7 +356,6 @@ export function formatDecision(
   const lines = [
     `❌ ตรวจสอบไม่พบยอด 1.22: ${evidenceText}`,
     `ยอดที่อ่านได้: ${displayAmounts.length > 0 ? `${displayAmounts.map((amount) => amount.toFixed(2)).join(", ")} บาท` : "อ่านยอดไม่ได้"}`,
-    `สาเหตุ: ${decision.failures.join(", ")}`,
   ];
   const hasWrongReadableAmount =
     displayAmounts.length > 0 &&
