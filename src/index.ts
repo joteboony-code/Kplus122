@@ -1537,6 +1537,7 @@ async function processPaddleText(
 
 type PendingFailureRunResult =
   | { status: "stale" | "silent" | "suppressed" | "sent" }
+  | { status: "waiting_for_images" }
   | { status: "waiting" | "busy"; retryAfterSeconds: number };
 
 async function processPendingFailureFinalizer(
@@ -1554,6 +1555,9 @@ async function processPendingFailureFinalizer(
       status: result.status,
       retryAfterSeconds: result.retryAfterSeconds ?? 1,
     };
+  }
+  if (result.status === "waiting_for_images") {
+    return { status: result.status };
   }
   if (!result.job || !result.evidence) {
     await coordinator.completeFailureFinalization(finalizer);
@@ -1844,6 +1848,7 @@ async function processFailureFinalizer(
     );
     return;
   }
+  if (result.status === "waiting_for_images") return;
   if (result.status === "sent") {
     console.log(JSON.stringify({
       event: "pending_failure_finalized",

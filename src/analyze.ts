@@ -350,8 +350,11 @@ export function formatDecision(
   const displayAmounts = inspection.labeledAmounts.length > 0
     ? inspection.labeledAmounts
     : inspection.observedAmounts;
+  const evidenceText = inspection.isKplusReceipt && inspection.hasSettlement
+    ? "พบ KPLUS + SETTLEMENT แต่ยอดไม่ตรง"
+    : "ไม่พบ KPLUS + SETTLEMENT ครบถ้วน";
   const lines = [
-    "❌ ตรวจสอบไม่พบยอด 1.22: สลิป KPLUS",
+    `❌ ตรวจสอบไม่พบยอด 1.22: ${evidenceText}`,
     `ยอดที่อ่านได้: ${displayAmounts.length > 0 ? `${displayAmounts.map((amount) => amount.toFixed(2)).join(", ")} บาท` : "อ่านยอดไม่ได้"}`,
     `สาเหตุ: ${decision.failures.join(", ")}`,
   ];

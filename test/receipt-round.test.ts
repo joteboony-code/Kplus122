@@ -84,6 +84,50 @@ describe("receipt round state", () => {
     });
   });
 
+  it("waits for every image in a known set before delivering a wrong amount", async () => {
+    const state = memoryState();
+    const first = {
+      ...job("set-1"),
+      referenceCode: "12345678",
+      imageSetId: "album-1",
+      imageSetTotal: 3,
+    };
+    const second = {
+      ...job("set-2"),
+      referenceCode: "12345678",
+      imageSetId: "album-1",
+      imageSetTotal: 3,
+    };
+    const third = {
+      ...job("set-3"),
+      referenceCode: "12345678",
+      imageSetId: "album-1",
+      imageSetTotal: 3,
+    };
+    await registerRoundImage(first, state, 1_000, "generation-1");
+    await registerRoundImage(second, state, 2_000, "generation-2");
+    const record = await recordPendingRoundFailure(
+      first,
+      { kind: "wrong-amount", text: "wrong", job: first },
+      state,
+      3_000,
+      "failure-generation",
+    );
+    const firstFinalizer = await completeRoundImageAndGetFailureFinalizer(first, state);
+    expect(await finalizePendingRoundFailure(firstFinalizer!, state, 100_000)).toEqual({
+      status: "waiting_for_images",
+    });
+
+    await completeRoundImage(second, state);
+    await registerRoundImage(third, state, 4_000, "generation-3");
+    const thirdFinalizer = await completeRoundImageAndGetFailureFinalizer(third, state);
+    expect(thirdFinalizer).toEqual(record?.finalizer);
+    expect(await finalizePendingRoundFailure(thirdFinalizer!, state, 100_000)).toMatchObject({
+      status: "finalized",
+      evidence: { text: "wrong" },
+    });
+  });
+
   it("groups separate LINE albums from the same sender and conversation", () => {
     expect(receiptRoundKey({ ...job("one"), imageSetId: "album-A" })).toBe(
       receiptRoundKey({ ...job("two"), imageSetId: "album-B" }),

@@ -125,7 +125,7 @@ function parseRoundState(value: string | null): ReceiptRoundState | null {
 }
 
 export interface PendingFailureFinalization {
-  status: "stale" | "waiting" | "busy" | "silent" | "finalized";
+  status: "stale" | "waiting" | "waiting_for_images" | "busy" | "silent" | "finalized";
   retryAfterSeconds?: number;
   evidence?: RoundEvidence;
   job?: ImageJob;
@@ -471,6 +471,14 @@ export async function finalizePendingRoundFailure(
     return { status: "stale" };
   }
   if (!current.failureEvidence) return { status: "silent" };
+
+  const hasIncompleteImageSet = Boolean(
+    current.imageSetId &&
+    Number.isInteger(current.imageSetTotal) &&
+    current.imageSetTotal! > 0 &&
+    !imageSetIsComplete(current),
+  );
+  if (hasIncompleteImageSet) return { status: "waiting_for_images" };
 
   if (
     current.failureFinalizationClaimedAt !== undefined &&
