@@ -46,8 +46,8 @@ function job(messageId: string, sender = "U1", group = "G1"): ImageJob {
 }
 
 describe("receipt round state", () => {
-  it("uses a 30-second inactivity window", () => {
-    expect(ROUND_INACTIVITY_SECONDS).toBe(30);
+  it("uses a 45-second inactivity window", () => {
+    expect(ROUND_INACTIVITY_SECONDS).toBe(45);
   });
 
   it("groups separate LINE albums from the same sender and conversation", () => {
@@ -80,11 +80,11 @@ describe("receipt round state", () => {
     );
 
     expect(await finalizeRound(first!, state, 21_000)).toEqual({ status: "stale" });
-    expect(await finalizeRound(second!, state, 40_000)).toEqual({
+    expect(await finalizeRound(second!, state, 55_000)).toEqual({
       status: "waiting",
       retryAfterSeconds: 1,
     });
-    expect((await finalizeRound(second!, state, 41_000)).status).toBe("finalized");
+    expect((await finalizeRound(second!, state, 56_000)).status).toBe("finalized");
   });
 
   it("keeps a wrong amount over a later unclear image", async () => {
@@ -141,17 +141,17 @@ describe("receipt round state", () => {
     await registerRoundImage(firstImage, state, firstImage.timestamp, "first");
     const finalizer = await registerRoundImage(lastImage, state, lastImage.timestamp, "last");
 
-    expect(await finalizeRound(finalizer!, state, 34_000)).toEqual({
+    expect(await finalizeRound(finalizer!, state, 49_000)).toEqual({
       status: "waiting",
       retryAfterSeconds: 1,
     });
     await completeRoundImage(firstImage, state);
-    expect(await finalizeRound(finalizer!, state, 34_000)).toEqual({
+    expect(await finalizeRound(finalizer!, state, 49_000)).toEqual({
       status: "waiting",
       retryAfterSeconds: 1,
     });
     await completeRoundImage(lastImage, state);
-    expect(await finalizeRound(finalizer!, state, 35_000)).toMatchObject({
+    expect(await finalizeRound(finalizer!, state, 50_000)).toMatchObject({
       status: "finalized",
       job: lastImage,
     });
@@ -253,11 +253,11 @@ describe("receipt round state", () => {
       "generation-last",
     );
 
-    expect(await finalizeRound(finalizer!, state, 37_999)).toEqual({
+    expect(await finalizeRound(finalizer!, state, 52_999)).toEqual({
       status: "waiting",
       retryAfterSeconds: 1,
     });
-    expect(await finalizeRound(finalizer!, state, 38_000)).toEqual({
+    expect(await finalizeRound(finalizer!, state, 53_000)).toEqual({
       status: "finalized",
       evidence: undefined,
       job: lastImage,
@@ -283,7 +283,7 @@ describe("receipt round state", () => {
       older.timestamp,
       "generation-older",
     )).toBeNull();
-    expect(await finalizeRound(finalizer!, state, 40_000)).toMatchObject({
+    expect(await finalizeRound(finalizer!, state, 55_000)).toMatchObject({
       status: "finalized",
       job: latest,
     });
@@ -473,12 +473,12 @@ describe("receipt round state", () => {
       "generation-1",
     );
 
-    expect((await finalizeRound(finalizer!, state, 30_000)).status).toBe("finalized");
-    expect((await finalizeRound(finalizer!, state, 30_001)).status).toBe("busy");
+    expect((await finalizeRound(finalizer!, state, 45_000)).status).toBe("finalized");
+    expect((await finalizeRound(finalizer!, state, 45_001)).status).toBe("busy");
     await releaseRoundFinalization(finalizer!, state);
-    expect((await finalizeRound(finalizer!, state, 30_002)).status).toBe("finalized");
+    expect((await finalizeRound(finalizer!, state, 45_002)).status).toBe("finalized");
     await completeRoundFinalization(finalizer!, state);
-    expect(await finalizeRound(finalizer!, state, 30_004)).toEqual({ status: "stale" });
+    expect(await finalizeRound(finalizer!, state, 45_004)).toEqual({ status: "stale" });
   });
 
   it("accepts a corrected pass immediately after a failed round was delivered", async () => {
@@ -491,7 +491,7 @@ describe("receipt round state", () => {
       "failed-generation",
     );
 
-    expect((await finalizeRound(finalizer!, state, 30_000)).status).toBe("finalized");
+    expect((await finalizeRound(finalizer!, state, 45_000)).status).toBe("finalized");
     await completeRoundFinalization(finalizer!, state);
 
     expect(await claimRoundPass(job("correct"), state, 20_001)).toBe("acquired");

@@ -1,7 +1,7 @@
 import type { StateStore } from "./state-store";
 import type { ImageJob, RoundFinalizeJob } from "./types";
 
-export const ROUND_INACTIVITY_SECONDS = 30;
+export const ROUND_INACTIVITY_SECONDS = 45;
 // Keep the round state for at least as long as a technician's active Tid.
 // This prevents a later photo for the same Tid from receiving another Stock card.
 export const ROUND_STATE_TTL_SECONDS = 30 * 60;
