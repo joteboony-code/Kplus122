@@ -2,7 +2,9 @@ import type { ImageJob } from "./types";
 import type { StateStore } from "./state-store";
 
 const PROCESSED_IMAGE_TTL_SECONDS = 7 * 24 * 60 * 60;
-const QUEUED_IMAGE_TTL_SECONDS = 24 * 60 * 60;
+// A queue claim is only a short duplicate-delivery guard. If a queue write or
+// consumer invocation is lost, it must not suppress a new delivery all day.
+const QUEUED_IMAGE_TTL_SECONDS = 10 * 60;
 
 export function processedImageKey(job: ImageJob): string {
   return `processed-image:${job.webhookEventId}:${job.messageId}`;
@@ -41,21 +43,25 @@ export async function claimImageQueue(
   return true;
 }
 
-export async function markImageQueued(
-  job: ImageJob,
-  state: StateStore,
-): Promise<void> {
-  await state.put(queuedImageKey(job), "queued", {
-    expirationTtl: QUEUED_IMAGE_TTL_SECONDS,
-  });
-}
-
 export async function releaseImageQueueClaim(
   job: ImageJob,
   state: StateStore,
 ): Promise<void> {
   const key = queuedImageKey(job);
   if ((await state.get(key)) === "claim") await state.delete(key);
+}
+
+/** Remove queue markers that outlived the short duplicate-delivery window. */
+export async function purgeStaleImageQueueMarkers(
+  db: D1Database,
+  nowSeconds = Math.floor(Date.now() / 1000),
+): Promise<number> {
+  const result = await db.prepare(`DELETE FROM control_state
+    WHERE key LIKE 'queued-image:%'
+      AND updated_at <= ?`).bind(
+    nowSeconds - QUEUED_IMAGE_TTL_SECONDS,
+  ).run();
+  return result.meta.changes ?? 0;
 }
 
 export { PROCESSED_IMAGE_TTL_SECONDS, QUEUED_IMAGE_TTL_SECONDS };

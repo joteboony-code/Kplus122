@@ -61,7 +61,7 @@ import {
   claimImageQueue,
   isImageProcessed,
   markImageProcessed,
-  markImageQueued,
+  purgeStaleImageQueueMarkers,
   releaseImageQueueClaim,
 } from "./processing-state";
 import {
@@ -473,20 +473,14 @@ async function recordQueueStatSafely(
 async function enqueueImageJobs(
   jobs: ImageJob[],
   env: Env,
-  queueState?: ReturnType<typeof d1StateStore>,
 ): Promise<{ queued: number; deferred: number }> {
   let queued = 0;
   let deferred = 0;
   for (let index = 0; index < jobs.length; index += 100) {
     const chunk = jobs.slice(index, index + 100);
     const result = await enqueueQueueBodiesSafely("images", chunk, env);
-    if (result === "queued") {
-      queued += chunk.length;
-      if (queueState) await Promise.all(chunk.map((job) => markImageQueued(job, queueState)));
-    } else {
-      deferred += chunk.length;
-      if (queueState) await Promise.all(chunk.map((job) => markImageQueued(job, queueState)));
-    }
+    if (result === "queued") queued += chunk.length;
+    else deferred += chunk.length;
   }
   return { queued, deferred };
 }
@@ -933,9 +927,12 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
     // Save all Reply tokens before queueing so a delayed image cannot make us
     // fall back to an older token from the same Tid.
     await recordReplyTokens(queueJobs, env);
-    let enqueueResult: { queued: number; deferred: number };
+    let enqueueResult: {
+      queued: number;
+      deferred: number;
+    };
     try {
-      enqueueResult = await enqueueImageJobs(queueJobs, env, queueState);
+      enqueueResult = await enqueueImageJobs(queueJobs, env);
     } catch (error) {
       console.error(JSON.stringify({
         event: "image_queue_enqueue_failed",
@@ -1025,7 +1022,7 @@ async function processQueuedWebhookEvents(
       if (await claimImageQueue(job, queueState)) queueJobs.push(job);
     }
     await recordReplyTokens(queueJobs, env);
-    await enqueueImageJobs(queueJobs, env, queueState);
+    await enqueueImageJobs(queueJobs, env);
   }
 }
 
@@ -2148,8 +2145,9 @@ export default {
     await recordQueueStatSafely(env, "queueDeletes", queueDeletes);
   },
   async scheduled(_controller, env): Promise<void> {
-    const [stateRows, imageSetBindingRows, inspectionRows, pendingQueue] = await Promise.all([
+    const [stateRows, queueMarkerRows, imageSetBindingRows, inspectionRows, pendingQueue] = await Promise.all([
       purgeExpiredState(env.CONTROL_DB),
+      purgeStaleImageQueueMarkers(env.CONTROL_DB),
       purgeExpiredImageSetBindings(env.CONTROL_DB),
       purgeExpiredInspectionLogs(env.CONTROL_DB),
       drainPendingQueueJobs(env),
@@ -2157,6 +2155,7 @@ export default {
     console.log(JSON.stringify({
       event: "daily_cleanup_completed",
       stateRows,
+      queueMarkerRows,
       imageSetBindingRows,
       inspectionRows,
       pendingQueue,
