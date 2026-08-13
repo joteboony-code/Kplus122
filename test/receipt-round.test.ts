@@ -8,9 +8,12 @@ import {
   completeRoundFinalization,
   completeRoundAfterPass,
   completeRoundImage,
+  completeRoundImageAndGetFailureFinalizer,
   completeRoundReplyToken,
   completeRoundStock,
   finalizeRound,
+  finalizePendingRoundFailure,
+  recordPendingRoundFailure,
   registerRoundImage,
   receiptRoundKey,
   recordRoundActivity,
@@ -21,6 +24,7 @@ import {
   releaseRoundPass,
   releaseRoundStock,
   ROUND_INACTIVITY_SECONDS,
+  FAILED_RESULT_WAIT_SECONDS,
 } from "../src/receipt-round";
 import type { StateStore } from "../src/state-store";
 import type { ImageJob } from "../src/types";
@@ -48,6 +52,36 @@ function job(messageId: string, sender = "U1", group = "G1"): ImageJob {
 describe("receipt round state", () => {
   it("uses a 45-second inactivity window", () => {
     expect(ROUND_INACTIVITY_SECONDS).toBe(45);
+    expect(FAILED_RESULT_WAIT_SECONDS).toBe(45);
+  });
+
+  it("waits for a later image before delivering a wrong amount", async () => {
+    const state = memoryState();
+    const first = { ...job("one"), referenceCode: "12345678", timestamp: 1_000 };
+    const second = { ...job("two"), referenceCode: "12345678", timestamp: 2_000 };
+    await registerRoundImage(first, state, 1_000, "generation-1");
+    await registerRoundImage(second, state, 2_000, "generation-2");
+    const record = await recordPendingRoundFailure(
+      first,
+      { kind: "wrong-amount", text: "wrong", job: first },
+      state,
+      3_000,
+      "failure-generation",
+    );
+    expect(record?.shouldSchedule).toBe(true);
+    const finalizer = await completeRoundImageAndGetFailureFinalizer(first, state);
+    expect(finalizer).toEqual(record?.finalizer);
+    expect(await finalizePendingRoundFailure(finalizer!, state, 4_000)).toEqual({
+      status: "waiting",
+      retryAfterSeconds: 44,
+    });
+
+    const finalizerAfterSecond = await completeRoundImageAndGetFailureFinalizer(second, state);
+    expect(finalizerAfterSecond).toEqual(record?.finalizer);
+    expect(await finalizePendingRoundFailure(finalizerAfterSecond!, state, 5_000)).toMatchObject({
+      status: "finalized",
+      evidence: { text: "wrong" },
+    });
   });
 
   it("groups separate LINE albums from the same sender and conversation", () => {
@@ -138,17 +172,17 @@ describe("receipt round state", () => {
     const state = memoryState();
     const firstImage = { ...job("first"), timestamp: 1_000 };
     const lastImage = { ...job("last"), timestamp: 5_000 };
-    await registerRoundImage(firstImage, state, firstImage.timestamp, "first");
-    const finalizer = await registerRoundImage(lastImage, state, lastImage.timestamp, "last");
+    const finalizer = await registerRoundImage(firstImage, state, firstImage.timestamp, "first");
+    expect(await registerRoundImage(lastImage, state, lastImage.timestamp, "last")).toBeNull();
 
     expect(await finalizeRound(finalizer!, state, 49_000)).toEqual({
       status: "waiting",
-      retryAfterSeconds: 1,
+      retryAfterSeconds: 15,
     });
     await completeRoundImage(firstImage, state);
     expect(await finalizeRound(finalizer!, state, 49_000)).toEqual({
       status: "waiting",
-      retryAfterSeconds: 1,
+      retryAfterSeconds: 15,
     });
     await completeRoundImage(lastImage, state);
     expect(await finalizeRound(finalizer!, state, 50_000)).toMatchObject({
@@ -212,9 +246,9 @@ describe("receipt round state", () => {
       imageSetIndex: 2,
       imageSetTotal: 2,
     };
-    await registerRoundImage(first, state, 1_000, "generation-1");
+    const finalizer = await registerRoundImage(first, state, 1_000, "generation-1");
     await completeRoundImage(first, state);
-    const finalizer = await registerRoundImage(second, state, 2_000, "generation-2");
+    expect(await registerRoundImage(second, state, 2_000, "generation-2")).toBeNull();
     await completeRoundImage(second, state);
 
     expect(await finalizeRound(finalizer!, state, 2_001)).toMatchObject({

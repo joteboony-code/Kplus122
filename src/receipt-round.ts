@@ -1,5 +1,5 @@
 import type { StateStore } from "./state-store";
-import type { ImageJob, RoundFinalizeJob } from "./types";
+import type { FailureFinalizeJob, ImageJob, RoundFinalizeJob } from "./types";
 
 export const ROUND_INACTIVITY_SECONDS = 45;
 // Keep the round state for at least as long as a technician's active Tid.
@@ -8,6 +8,10 @@ export const ROUND_STATE_TTL_SECONDS = 30 * 60;
 export const ROUND_COMPLETED_SUPPRESSION_SECONDS = 60;
 export const ROUND_FINALIZATION_LEASE_SECONDS = 45;
 export const ROUND_PASS_CLAIM_LEASE_SECONDS = 2 * 60;
+/** Avoid polling the Stock finalizer every second while OCR is still running. */
+export const ROUND_PENDING_RETRY_SECONDS = 15;
+/** Maximum time to wait for OCR results after the first wrong-amount result. */
+export const FAILED_RESULT_WAIT_SECONDS = 45;
 
 export type RoundEvidenceKind = "wrong-amount" | "uncertain";
 
@@ -37,6 +41,10 @@ interface ReceiptRoundState {
   imageSetTotal?: number;
   imageSetMessageIds?: string[];
   evidence?: RoundEvidence;
+  failureEvidence?: RoundEvidence;
+  failureFirstAt?: number;
+  failureFinalizerScheduledGeneration?: string;
+  failureFinalizationClaimedAt?: number;
   completedAt?: number;
   passOwnerMessageId?: string;
   passClaimedAt?: number;
@@ -114,6 +122,18 @@ function parseRoundState(value: string | null): ReceiptRoundState | null {
   } catch {
     return null;
   }
+}
+
+export interface PendingFailureFinalization {
+  status: "stale" | "waiting" | "busy" | "silent" | "finalized";
+  retryAfterSeconds?: number;
+  evidence?: RoundEvidence;
+  job?: ImageJob;
+}
+
+export interface PendingFailureRecord {
+  finalizer: FailureFinalizeJob;
+  shouldSchedule: boolean;
 }
 
 function imageSetIsComplete(state: ReceiptRoundState | null): boolean {
@@ -288,8 +308,12 @@ export async function registerRoundImage(
     : [...(active?.pendingMessageIds ?? []), job.messageId];
   const isNewer = !active?.latestJob ||
     (job.timestamp ?? now) >= (active.latestJob.timestamp ?? active.updatedAt);
-  const nextGeneration = isNewer ? generation : active!.generation;
-  const shouldSchedule = active?.finalizerScheduledGeneration !== nextGeneration;
+  // Keep one stable finalizer per TID round. The finalizer reads latestJob and
+  // updatedAt from the Durable Object, so a new image does not need another
+  // Queue message just to reset the quiet window.
+  const nextGeneration = active?.generation ?? generation;
+  const finalizerGeneration = active?.finalizerScheduledGeneration ?? nextGeneration;
+  const shouldSchedule = active?.finalizerScheduledGeneration === undefined;
   const hasImageSet = Boolean(
     job.imageSetId &&
     Number.isInteger(job.imageSetTotal) &&
@@ -326,13 +350,13 @@ export async function registerRoundImage(
     imageSetId,
     imageSetTotal,
     imageSetMessageIds,
-    finalizerScheduledGeneration: nextGeneration,
+    finalizerScheduledGeneration: finalizerGeneration,
   } satisfies ReceiptRoundState, job, now);
   await state.put(roundKey, JSON.stringify(nextState), {
     expirationTtl: ROUND_STATE_TTL_SECONDS,
   });
   return shouldSchedule
-    ? { kind: "round-finalize", roundKey, generation: nextGeneration }
+    ? { kind: "round-finalize", roundKey, generation: finalizerGeneration }
     : null;
 }
 
@@ -350,6 +374,179 @@ export async function completeRoundImage(
   await state.put(roundKey, JSON.stringify({
     ...current,
     pendingMessageIds: current.pendingMessageIds.filter((id) => id !== job.messageId),
+  } satisfies ReceiptRoundState), {
+    expirationTtl: ROUND_STATE_TTL_SECONDS,
+  });
+}
+
+/**
+ * Remember a wrong/uncertain OCR result without claiming the LINE reply yet.
+ * A later image with a matching amount must still be allowed to win.
+ */
+export async function recordPendingRoundFailure(
+  job: ImageJob,
+  evidence: RoundEvidence,
+  state: StateStore,
+  now = Date.now(),
+  generation = crypto.randomUUID(),
+): Promise<PendingFailureRecord | null> {
+  const roundKey = receiptRoundKey(job);
+  if (!roundKey) return null;
+
+  const current = parseRoundState(await state.get(roundKey));
+  if (
+    current?.completedAt !== undefined ||
+    current?.failureCompletedAt !== undefined ||
+    (current && passClaimIsActive(current, now))
+  ) {
+    return null;
+  }
+
+  const failureGeneration = current?.failureFinalizerScheduledGeneration ?? generation;
+  const next: ReceiptRoundState = {
+    ...current,
+    generation: current?.generation ?? crypto.randomUUID(),
+    updatedAt: Math.max(current?.updatedAt ?? Number.NEGATIVE_INFINITY, now),
+    processedMessageIds: current?.processedMessageIds ?? [],
+    failureEvidence: betterEvidence(current?.failureEvidence, evidence),
+    failureFirstAt: current?.failureFirstAt ?? now,
+    failureFinalizerScheduledGeneration: failureGeneration,
+  };
+  await state.put(roundKey, JSON.stringify(next), {
+    expirationTtl: ROUND_STATE_TTL_SECONDS,
+  });
+  return {
+    finalizer: {
+      kind: "failure-finalize",
+      roundKey,
+      generation: failureGeneration,
+    },
+    shouldSchedule: current?.failureFinalizerScheduledGeneration === undefined,
+  };
+}
+
+/** Complete one OCR image and return the TID's failure finalizer, if any. */
+export async function completeRoundImageAndGetFailureFinalizer(
+  job: ImageJob,
+  state: StateStore,
+): Promise<FailureFinalizeJob | null> {
+  const roundKey = receiptRoundKey(job);
+  if (!roundKey) return null;
+  const current = parseRoundState(await state.get(roundKey));
+  if (!current || current.completedAt !== undefined) {
+    return null;
+  }
+
+  const pendingMessageIds = current.pendingMessageIds?.includes(job.messageId)
+    ? current.pendingMessageIds.filter((id) => id !== job.messageId)
+    : current.pendingMessageIds;
+  const next = pendingMessageIds === current.pendingMessageIds
+    ? current
+    : { ...current, pendingMessageIds };
+  if (next !== current) {
+    await state.put(roundKey, JSON.stringify(next satisfies ReceiptRoundState), {
+      expirationTtl: ROUND_STATE_TTL_SECONDS,
+    });
+  }
+  if (!next.failureEvidence || !next.failureFinalizerScheduledGeneration) return null;
+  return {
+    kind: "failure-finalize",
+    roundKey,
+    generation: next.failureFinalizerScheduledGeneration,
+  };
+}
+
+export async function finalizePendingRoundFailure(
+  job: FailureFinalizeJob,
+  state: StateStore,
+  now = Date.now(),
+): Promise<PendingFailureFinalization> {
+  const current = parseRoundState(await state.get(job.roundKey));
+  if (
+    !current ||
+    current.completedAt !== undefined ||
+    current.failureCompletedAt !== undefined ||
+    current.failureFinalizerScheduledGeneration !== job.generation
+  ) {
+    return { status: "stale" };
+  }
+  if (!current.failureEvidence) return { status: "silent" };
+
+  if (
+    current.failureFinalizationClaimedAt !== undefined &&
+    now - current.failureFinalizationClaimedAt < ROUND_FINALIZATION_LEASE_SECONDS * 1000
+  ) {
+    return {
+      status: "busy",
+      retryAfterSeconds: Math.max(
+        1,
+        Math.ceil(
+          (ROUND_FINALIZATION_LEASE_SECONDS * 1000 -
+            (now - current.failureFinalizationClaimedAt)) / 1000,
+        ),
+      ),
+    };
+  }
+
+  const firstFailedAt = current.failureFirstAt ?? now;
+  const elapsedMs = Math.max(0, now - firstFailedAt);
+  const remainingMs = FAILED_RESULT_WAIT_SECONDS * 1000 - elapsedMs;
+  if ((current.pendingMessageIds?.length ?? 0) > 0 && remainingMs > 0) {
+    return {
+      status: "waiting",
+      retryAfterSeconds: Math.max(1, Math.ceil(remainingMs / 1000)),
+    };
+  }
+
+  await state.put(job.roundKey, JSON.stringify({
+    ...current,
+    failureFinalizationClaimedAt: now,
+  } satisfies ReceiptRoundState), {
+    expirationTtl: ROUND_STATE_TTL_SECONDS,
+  });
+  return {
+    status: "finalized",
+    evidence: current.failureEvidence,
+    job: current.failureEvidence.job,
+  };
+}
+
+export async function releasePendingRoundFailureFinalization(
+  job: FailureFinalizeJob,
+  state: StateStore,
+): Promise<void> {
+  const current = parseRoundState(await state.get(job.roundKey));
+  if (
+    !current ||
+    current.failureFinalizerScheduledGeneration !== job.generation
+  ) return;
+  if (current.failureFinalizationClaimedAt === undefined) return;
+  const { failureFinalizationClaimedAt: _claim, ...next } = current;
+  await state.put(job.roundKey, JSON.stringify(next satisfies ReceiptRoundState), {
+    expirationTtl: ROUND_STATE_TTL_SECONDS,
+  });
+}
+
+export async function completePendingRoundFailureFinalization(
+  job: FailureFinalizeJob,
+  state: StateStore,
+): Promise<void> {
+  const current = parseRoundState(await state.get(job.roundKey));
+  if (
+    !current ||
+    current.failureFinalizerScheduledGeneration !== job.generation
+  ) return;
+  const {
+    failureFinalizationClaimedAt: _claim,
+    failureEvidence: _evidence,
+    failureFirstAt: _firstFailedAt,
+    failureFinalizerScheduledGeneration: _generation,
+    ...next
+  } = current;
+  await state.put(job.roundKey, JSON.stringify({
+    ...next,
+    generation: crypto.randomUUID(),
+    updatedAt: Date.now(),
   } satisfies ReceiptRoundState), {
     expirationTtl: ROUND_STATE_TTL_SECONDS,
   });
@@ -453,6 +650,7 @@ export async function releaseRoundFailure(
   const {
     failureOwnerMessageId: _owner,
     failureClaimedAt: _claimedAt,
+    failureFinalizationClaimedAt: _finalizationClaim,
     ...next
   } = current;
   await state.put(roundKey, JSON.stringify(next), {
@@ -556,6 +754,10 @@ export async function completeRoundAfterFailure(
   const {
     failureOwnerMessageId: _owner,
     failureClaimedAt: _claimedAt,
+    failureFinalizationClaimedAt: _finalizationClaim,
+    failureEvidence: _evidence,
+    failureFirstAt: _firstFailedAt,
+    failureFinalizerScheduledGeneration: _finalizerGeneration,
     ...completed
   } = current;
   const next: ReceiptRoundState = {
@@ -616,7 +818,7 @@ export async function finalizeRound(
     !current ||
     current.completedAt !== undefined ||
     current.stockCompletedAt !== undefined ||
-    current.generation !== job.generation
+    current.finalizerScheduledGeneration !== job.generation
   ) {
     return { status: "stale" };
   }
@@ -645,8 +847,8 @@ export async function finalizeRound(
   ) {
     return {
       status: "waiting",
-      retryAfterSeconds: current.pendingMessageIds?.length
-        ? 1
+        retryAfterSeconds: current.pendingMessageIds?.length
+        ? ROUND_PENDING_RETRY_SECONDS
         : Math.max(1, Math.ceil((inactivityMs - elapsedMs) / 1000)),
     };
   }
@@ -663,7 +865,7 @@ export async function releaseRoundFinalization(
   state: StateStore,
 ): Promise<void> {
   const current = parseRoundState(await state.get(job.roundKey));
-  if (!current || current.generation !== job.generation) return;
+  if (!current || current.finalizerScheduledGeneration !== job.generation) return;
   const { finalizationClaimedAt: _claim, ...next } = current;
   await state.put(job.roundKey, JSON.stringify(next), {
     expirationTtl: ROUND_STATE_TTL_SECONDS,
@@ -675,7 +877,7 @@ export async function completeRoundFinalization(
   state: StateStore,
 ): Promise<void> {
   const current = parseRoundState(await state.get(job.roundKey));
-  if (!current || current.generation !== job.generation) return;
+  if (!current || current.finalizerScheduledGeneration !== job.generation) return;
   const {
     finalizationClaimedAt: _claim,
     finalizerScheduledGeneration: _scheduledGeneration,

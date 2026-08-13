@@ -67,6 +67,9 @@ function jobIdentity(body: QueueJob): string {
   if ("kind" in body && body.kind === "round-finalize") {
     return `round:${body.roundKey}:${body.generation}`;
   }
+  if ("kind" in body && body.kind === "failure-finalize") {
+    return `failure:${body.roundKey}:${body.generation}`;
+  }
   if ("kind" in body && body.kind === "paddle-poll") {
     return `paddle:${body.job.webhookEventId}:${body.job.messageId}:${body.paddleJobId}:${body.pollCount}`;
   }

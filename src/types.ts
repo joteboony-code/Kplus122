@@ -60,6 +60,12 @@ export interface RoundFinalizeJob {
   generation: string;
 }
 
+export interface FailureFinalizeJob {
+  kind: "failure-finalize";
+  roundKey: string;
+  generation: string;
+}
+
 export interface LineWebhookQueueJob {
   kind: "line-webhook";
   events: LineWebhookEvent[];
@@ -82,12 +88,17 @@ export interface OcrFallbackJob {
 export type QueueJob =
   | ImageJob
   | RoundFinalizeJob
+  | FailureFinalizeJob
   | LineWebhookQueueJob
   | PaddlePollJob
   | OcrFallbackJob;
 
 export function isRoundFinalizeJob(job: QueueJob): job is RoundFinalizeJob {
   return "kind" in job && job.kind === "round-finalize";
+}
+
+export function isFailureFinalizeJob(job: QueueJob): job is FailureFinalizeJob {
+  return "kind" in job && job.kind === "failure-finalize";
 }
 
 export function isLineWebhookQueueJob(job: QueueJob): job is LineWebhookQueueJob {

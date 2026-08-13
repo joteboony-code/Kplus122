@@ -55,6 +55,7 @@ import { hasRecentPass, recordRecentPass } from "./reply-state";
 import { isImageProcessed, markImageProcessed } from "./processing-state";
 import {
   receiptRoundKey,
+  FAILED_RESULT_WAIT_SECONDS,
   ROUND_INACTIVITY_SECONDS,
   type RoundEvidence,
   type RoundReplyTokenSelection,
@@ -93,10 +94,12 @@ import {
 import { listServiceAreaMentions } from "./service-technicians";
 import {
   isLineWebhookQueueJob,
+  isFailureFinalizeJob,
   isOcrFallbackJob,
   isPaddlePollJob,
   isRoundFinalizeJob,
   type ImageJob,
+  type FailureFinalizeJob,
   type LineWebhookQueueJob,
   type LineWebhookEvent,
   type LineWebhookBody,
@@ -379,7 +382,7 @@ async function sendQueueBodies(
   if (target === "images") {
     await env.IMAGE_QUEUE.sendBatch(
       bodies.map((body) => ({
-        body: body as ImageJob | RoundFinalizeJob | PaddlePollJob,
+        body: body as ImageJob | RoundFinalizeJob | FailureFinalizeJob | PaddlePollJob,
       })),
     );
     await recordQueueStatSafely(env, "queueWrites", bodies.length);
@@ -1532,6 +1535,61 @@ async function processPaddleText(
   });
 }
 
+type PendingFailureRunResult =
+  | { status: "stale" | "silent" | "suppressed" | "sent" }
+  | { status: "waiting" | "busy"; retryAfterSeconds: number };
+
+async function processPendingFailureFinalizer(
+  finalizer: FailureFinalizeJob,
+  env: Env,
+  trace?: InspectionTrace,
+): Promise<PendingFailureRunResult> {
+  const coordinator = env.RECEIPT_ROUNDS.getByName(finalizer.roundKey);
+  const result = await coordinator.finalizeFailure(finalizer);
+  if (result.status === "stale" || result.status === "silent") {
+    return { status: result.status };
+  }
+  if (result.status === "waiting" || result.status === "busy") {
+    return {
+      status: result.status,
+      retryAfterSeconds: result.retryAfterSeconds ?? 1,
+    };
+  }
+  if (!result.job || !result.evidence) {
+    await coordinator.completeFailureFinalization(finalizer);
+    return { status: "silent" };
+  }
+  if (!isCurrentQueueJobDay(result.job)) {
+    console.log(JSON.stringify({
+      event: "pending_failure_expired",
+      roundKey: finalizer.roundKey,
+      messageId: result.job.messageId,
+    }));
+    await coordinator.completeFailureFinalization(finalizer);
+    return { status: "silent" };
+  }
+
+  const deliveryTrace = trace ?? { providers: [], providerTimings: {} };
+  try {
+    const delivery = await replyKplusFailure(
+      result.job,
+      result.evidence.text,
+      env,
+      deliveryTrace,
+    );
+    if (delivery === "suppressed") {
+      await coordinator.completeFailureFinalization(finalizer);
+      return { status: "suppressed" };
+    }
+    await updateAuditLineDeliverySafely(env, result.job, "sent");
+    await coordinator.completeFailureFinalization(finalizer);
+    return { status: "sent" };
+  } catch (error) {
+    await coordinator.releaseFailureFinalization(finalizer);
+    throw error;
+  }
+}
+
 async function finalizeImageResult(
   job: ImageJob,
   initialResult: ProcessResult,
@@ -1540,20 +1598,45 @@ async function finalizeImageResult(
   startedAt: number,
 ): Promise<void> {
   let result = initialResult;
+  let pendingFailureRecord: Awaited<ReturnType<
+    ReturnType<Env["RECEIPT_ROUNDS"]["getByName"]>["recordPendingFailure"]
+  >> = null;
   if (result.outcome !== "pass" && result.evidence) {
-    const delivery = await replyKplusFailure(
-      job,
-      result.evidence.text,
+    const roundKey = receiptRoundKey(job);
+    if (roundKey) {
+      pendingFailureRecord = await env.RECEIPT_ROUNDS.getByName(roundKey)
+        .recordPendingFailure(
+          job,
+          { ...result.evidence, job },
+          crypto.randomUUID(),
+        );
+    }
+  }
+
+  const pendingFailureFinalizer = await completeStockRoundImageAndGetFailureFinalizer(
+    job,
+    env,
+  );
+  const failureFinalizer = pendingFailureFinalizer ?? pendingFailureRecord?.finalizer;
+  if (failureFinalizer) {
+    const settled = await processPendingFailureFinalizer(
+      failureFinalizer,
       env,
       trace,
     );
-    if (delivery === "suppressed") {
+    if (settled.status === "waiting" && pendingFailureRecord?.shouldSchedule) {
+      await scheduleFailureFinalizer(
+        failureFinalizer,
+        env,
+        Math.min(FAILED_RESULT_WAIT_SECONDS, settled.retryAfterSeconds),
+      );
+    }
+    if (settled.status === "suppressed") {
       trace.stage = "round-failure-suppression";
       trace.lineDeliveryStatus = "not_applicable";
       result = IGNORED_RESULT;
     }
   }
-  if (result.outcome === "ignored") await completeStockRoundImage(job, env);
   trace.lineDeliveryStatus ??= result.evidence ? "pending" : "not_applicable";
   try {
     await markImageProcessed(job, d1StateStore(env.CONTROL_DB));
@@ -1686,6 +1769,32 @@ async function scheduleRoundFinalizer(
   }
 }
 
+async function scheduleFailureFinalizer(
+  finalizer: FailureFinalizeJob,
+  env: Env,
+  delaySeconds = FAILED_RESULT_WAIT_SECONDS,
+): Promise<void> {
+  try {
+    await env.IMAGE_QUEUE.send(finalizer, { delaySeconds });
+    await recordQueueStatSafely(env, "queueWrites", 1);
+  } catch (error) {
+    const detail = queueErrorText(error);
+    const stored = await savePendingQueueJobs(
+      env.CONTROL_DB,
+      "images",
+      [finalizer],
+      detail,
+    );
+    console.error(JSON.stringify({
+      event: "failure_finalizer_deferred",
+      roundKey: finalizer.roundKey,
+      generation: finalizer.generation,
+      stored,
+      error: detail,
+    }));
+  }
+}
+
 async function registerStockRoundImage(job: ImageJob, env: Env): Promise<void> {
   const roundKey = receiptRoundKey(job);
   if (!roundKey) return;
@@ -1710,6 +1819,38 @@ async function completeStockRoundImage(job: ImageJob, env: Env): Promise<void> {
   const roundKey = receiptRoundKey(job);
   if (!roundKey) return;
   await env.RECEIPT_ROUNDS.getByName(roundKey).completeImage(job);
+}
+
+async function completeStockRoundImageAndGetFailureFinalizer(
+  job: ImageJob,
+  env: Env,
+): Promise<FailureFinalizeJob | null> {
+  const roundKey = receiptRoundKey(job);
+  if (!roundKey) return null;
+  return env.RECEIPT_ROUNDS.getByName(roundKey)
+    .completeImageAndGetFailureFinalizer(job);
+}
+
+async function processFailureFinalizer(
+  finalizer: FailureFinalizeJob,
+  env: Env,
+): Promise<void> {
+  const result = await processPendingFailureFinalizer(finalizer, env);
+  if (result.status === "waiting" || result.status === "busy") {
+    await scheduleFailureFinalizer(
+      finalizer,
+      env,
+      Math.min(FAILED_RESULT_WAIT_SECONDS, result.retryAfterSeconds),
+    );
+    return;
+  }
+  if (result.status === "sent") {
+    console.log(JSON.stringify({
+      event: "pending_failure_finalized",
+      roundKey: finalizer.roundKey,
+      generation: finalizer.generation,
+    }));
+  }
 }
 
 async function processRoundFinalizer(
@@ -1813,6 +1954,22 @@ export default {
         } catch (error) {
           console.error(JSON.stringify({
             event: "round_finalizer_failed",
+            roundKey: body.roundKey,
+            attempts: message.attempts,
+            error: error instanceof Error ? error.message : "unknown error",
+          }));
+          message.retry({ delaySeconds: 5 });
+        }
+        continue;
+      }
+
+      if (isFailureFinalizeJob(body)) {
+        try {
+          await processFailureFinalizer(body, env);
+          acknowledge(message);
+        } catch (error) {
+          console.error(JSON.stringify({
+            event: "failure_finalizer_failed",
             roundKey: body.roundKey,
             attempts: message.attempts,
             error: error instanceof Error ? error.message : "unknown error",

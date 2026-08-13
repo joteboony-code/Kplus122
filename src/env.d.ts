@@ -16,6 +16,7 @@ interface Env {
   IMAGE_QUEUE: Queue<
     import("./types").ImageJob |
     import("./types").RoundFinalizeJob |
+    import("./types").FailureFinalizeJob |
     import("./types").PaddlePollJob
   >;
   OCR_FALLBACK_QUEUE: Queue<import("./types").OcrFallbackJob>;

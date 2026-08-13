@@ -7,23 +7,30 @@ import {
   completeRoundFinalization,
   completeRoundAfterPass,
   completeRoundImage,
+  completeRoundImageAndGetFailureFinalizer,
   completeRoundReplyToken,
   completeRoundStock,
+  completePendingRoundFailureFinalization,
   finalizeRound,
+  finalizePendingRoundFailure,
+  recordPendingRoundFailure,
   registerRoundImage,
   recordRoundReplyToken,
   recordRoundActivity,
   releaseRoundFailure,
+  releasePendingRoundFailureFinalization,
   releaseRoundFinalization,
   releaseRoundPass,
   releaseRoundStock,
   selectLatestRoundReplyToken,
+  type PendingFailureFinalization,
+  type PendingFailureRecord,
   type RoundEvidence,
   type RoundFinalization,
   type RoundReplyTokenSelection,
 } from "./receipt-round";
 import type { StateStore } from "./state-store";
-import type { ImageJob, RoundFinalizeJob } from "./types";
+import type { FailureFinalizeJob, ImageJob, RoundFinalizeJob } from "./types";
 
 const STATE_KEY_PREFIX = "round:";
 
@@ -82,6 +89,28 @@ export class ReceiptRoundCoordinator extends DurableObject<Env> {
   async completeImage(job: ImageJob): Promise<void> {
     await this.ctx.storage.transaction((transaction) =>
       completeRoundImage(job, this.transactionState(transaction)));
+  }
+
+  async completeImageAndGetFailureFinalizer(
+    job: ImageJob,
+  ): Promise<FailureFinalizeJob | null> {
+    return this.ctx.storage.transaction((transaction) =>
+      completeRoundImageAndGetFailureFinalizer(job, this.transactionState(transaction)));
+  }
+
+  async recordPendingFailure(
+    job: ImageJob,
+    evidence: RoundEvidence,
+    generation: string,
+  ): Promise<PendingFailureRecord | null> {
+    return this.ctx.storage.transaction((transaction) =>
+      recordPendingRoundFailure(
+        job,
+        evidence,
+        this.transactionState(transaction),
+        Date.now(),
+        generation,
+      ));
   }
 
   async recordReplyToken(job: ImageJob): Promise<void> {
@@ -147,6 +176,21 @@ export class ReceiptRoundCoordinator extends DurableObject<Env> {
   async finalize(job: RoundFinalizeJob): Promise<RoundFinalization> {
     return this.ctx.storage.transaction((transaction) =>
       finalizeRound(job, this.transactionState(transaction)));
+  }
+
+  async finalizeFailure(job: FailureFinalizeJob): Promise<PendingFailureFinalization> {
+    return this.ctx.storage.transaction((transaction) =>
+      finalizePendingRoundFailure(job, this.transactionState(transaction)));
+  }
+
+  async releaseFailureFinalization(job: FailureFinalizeJob): Promise<void> {
+    await this.ctx.storage.transaction((transaction) =>
+      releasePendingRoundFailureFinalization(job, this.transactionState(transaction)));
+  }
+
+  async completeFailureFinalization(job: FailureFinalizeJob): Promise<void> {
+    await this.ctx.storage.transaction((transaction) =>
+      completePendingRoundFailureFinalization(job, this.transactionState(transaction)));
   }
 
 
