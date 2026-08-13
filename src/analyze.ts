@@ -330,7 +330,7 @@ export function shouldReplyAfterGoogleVision(
 }
 
 export function formatKplusSuccess(amount: number): string {
-  return `✅ ตรวจสอบผ่าน: พบสลิป KPLUS ยอด ${amount.toFixed(2)} บาท ข้อมูลถูกต้อง`;
+  return `✅ ตรวจสอบผ่าน: พบ KPLUS + SETTLEMENT + ยอด ${amount.toFixed(2)} บาท ข้อมูลถูกต้อง`;
 }
 
 export function formatDecision(

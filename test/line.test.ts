@@ -255,7 +255,7 @@ describe("LINE webhook", () => {
       replyTarget: "group-1",
       sourceType: "group",
       senderUserId: "U123",
-    }, "✅ ตรวจสอบผ่าน: พบสลิป KPLUS ยอด 1.22 บาท ข้อมูลถูกต้อง", "channel-token");
+    }, "✅ ตรวจสอบผ่าน: พบ KPLUS + SETTLEMENT + ยอด 1.22 บาท ข้อมูลถูกต้อง", "channel-token");
 
     expect(handled).toBe(true);
     expect(fetchMock).toHaveBeenCalledTimes(1);

@@ -300,10 +300,10 @@ describe("receipt decision", () => {
 
   it("formats the requested KPLUS-only success message", () => {
     expect(formatKplusSuccess(1.22)).toBe(
-      "✅ ตรวจสอบผ่าน: พบสลิป KPLUS ยอด 1.22 บาท ข้อมูลถูกต้อง",
+      "✅ ตรวจสอบผ่าน: พบ KPLUS + SETTLEMENT + ยอด 1.22 บาท ข้อมูลถูกต้อง",
     );
     expect(formatKplusSuccess(-1.22)).toBe(
-      "✅ ตรวจสอบผ่าน: พบสลิป KPLUS ยอด -1.22 บาท ข้อมูลถูกต้อง",
+      "✅ ตรวจสอบผ่าน: พบ KPLUS + SETTLEMENT + ยอด -1.22 บาท ข้อมูลถูกต้อง",
     );
   });
 
