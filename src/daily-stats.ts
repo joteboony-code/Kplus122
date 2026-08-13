@@ -15,6 +15,9 @@ export interface DailyStats {
   googleVisionCalls: number;
   googleVisionErrors: number;
   googleVisionCapSkips: number;
+  queueWrites: number;
+  queueReads: number;
+  queueDeletes: number;
 }
 
 export type DailyStatName = keyof DailyStats;
@@ -35,6 +38,9 @@ const EMPTY_STATS: DailyStats = {
   googleVisionCalls: 0,
   googleVisionErrors: 0,
   googleVisionCapSkips: 0,
+  queueWrites: 0,
+  queueReads: 0,
+  queueDeletes: 0,
 };
 
 function bangkokDate(now: Date): string {
@@ -73,5 +79,15 @@ export async function incrementDailyStat(
   now = new Date(),
 ): Promise<number> {
   const result = await counters.getByName(counterId(now)).increment(name);
+  return result.value;
+}
+
+export async function incrementDailyStatBy(
+  counters: OperationalCounterNamespace,
+  name: DailyStatName,
+  amount: number,
+  now = new Date(),
+): Promise<number> {
+  const result = await counters.getByName(counterId(now)).incrementBy(name, amount);
   return result.value;
 }

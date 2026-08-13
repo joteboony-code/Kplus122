@@ -20,7 +20,11 @@ import { googleVisionOcr } from "./google-vision";
 import {
   reserveGoogleVisionRequest,
 } from "./google-vision-usage";
-import { incrementDailyStat, type DailyStatName } from "./daily-stats";
+import {
+  incrementDailyStat,
+  incrementDailyStatBy,
+  type DailyStatName,
+} from "./daily-stats";
 import { ocrSpaceOcr } from "./ocr-space";
 import {
   markOcrSpaceQuotaExhausted,
@@ -378,17 +382,20 @@ async function sendQueueBodies(
         body: body as ImageJob | RoundFinalizeJob | PaddlePollJob,
       })),
     );
+    await recordQueueStatSafely(env, "queueWrites", bodies.length);
     return;
   }
   if (target === "ocr-fallback") {
     await env.OCR_FALLBACK_QUEUE.sendBatch(
       bodies.map((body) => ({ body: body as OcrFallbackJob })),
     );
+    await recordQueueStatSafely(env, "queueWrites", bodies.length);
     return;
   }
   await env.LINE_WEBHOOKS.sendBatch(
     bodies.map((body) => ({ body: body as LineWebhookQueueJob })),
   );
+  await recordQueueStatSafely(env, "queueWrites", bodies.length);
 }
 
 async function enqueueQueueBodiesSafely(
@@ -426,6 +433,26 @@ async function enqueueQueueBodiesSafely(
       }));
       throw persistError;
     }
+  }
+}
+
+type QueueDailyStatName = "queueWrites" | "queueReads" | "queueDeletes";
+
+async function recordQueueStatSafely(
+  env: Env,
+  name: QueueDailyStatName,
+  amount: number,
+): Promise<void> {
+  if (amount <= 0) return;
+  try {
+    await incrementDailyStatBy(env.OPERATIONAL_COUNTERS, name, amount);
+  } catch (error) {
+    console.warn(JSON.stringify({
+      event: "queue_stat_record_failed",
+      stat: name,
+      amount,
+      error: error instanceof Error ? error.message : "unknown error",
+    }));
   }
 }
 
@@ -1413,6 +1440,7 @@ async function submitPaddleJob(
         delayedPoll,
         { delaySeconds: PADDLEOCR_POLL_DELAY_SECONDS },
       );
+      await recordQueueStatSafely(env, "queueWrites", 1);
     } catch (error) {
       downstreamStarted = true;
       await processPaddleFallbackInline(
@@ -1609,6 +1637,7 @@ async function processPaddlePoll(
         ...data,
         pollCount,
       }, { delaySeconds: PADDLEOCR_POLL_DELAY_SECONDS });
+      await recordQueueStatSafely(env, "queueWrites", 1);
     } catch (error) {
       await processPaddleFallbackInline(
         data.job,
@@ -1638,6 +1667,7 @@ async function scheduleRoundFinalizer(
 ): Promise<void> {
   try {
     await env.IMAGE_QUEUE.send(finalizer, { delaySeconds });
+    await recordQueueStatSafely(env, "queueWrites", 1);
   } catch (error) {
     const detail = queueErrorText(error);
     const stored = await savePendingQueueJobs(
@@ -1742,6 +1772,12 @@ export default {
   },
 
   async queue(batch, env): Promise<void> {
+    await recordQueueStatSafely(env, "queueReads", batch.messages.length);
+    let queueDeletes = 0;
+    const acknowledge = (message: { ack(): void }): void => {
+      message.ack();
+      queueDeletes += 1;
+    };
     for (const message of batch.messages) {
       const body = message.body;
       if (!isCurrentQueueJobDay(body)) {
@@ -1751,13 +1787,13 @@ export default {
           messageId: "messageId" in body ? body.messageId :
             "job" in body ? body.job.messageId : undefined,
         }));
-        message.ack();
+        acknowledge(message);
         continue;
       }
       if (isLineWebhookQueueJob(body)) {
         try {
           await processQueuedWebhookEvents(body.events, env, body.receivedAtMs);
-          message.ack();
+          acknowledge(message);
         } catch (error) {
           console.error(JSON.stringify({
             event: "webhook_queue_failed",
@@ -1773,7 +1809,7 @@ export default {
       if (isRoundFinalizeJob(body)) {
         try {
           await processRoundFinalizer(body, env);
-          message.ack();
+          acknowledge(message);
         } catch (error) {
           console.error(JSON.stringify({
             event: "round_finalizer_failed",
@@ -1794,7 +1830,7 @@ export default {
       try {
         if (isPaddlePollJob(body)) {
           await processPaddlePoll(body, env, trace, startedAt);
-          message.ack();
+          acknowledge(message);
           continue;
         }
 
@@ -1806,7 +1842,7 @@ export default {
           }));
           const result = await processImageJob(job, env, trace);
           await finalizeImageResult(job, result, env, trace, startedAt);
-          message.ack();
+          acknowledge(message);
           continue;
         }
 
@@ -1830,7 +1866,7 @@ export default {
           }));
           await completeStockRoundImage(job, env);
           await recordAuditSafely(env, job, "ignored", trace, startedAt);
-          message.ack();
+          acknowledge(message);
           continue;
         }
 
@@ -1849,12 +1885,12 @@ export default {
           await recordStat(env, "processed");
           await recordStat(env, "ignored");
           await recordAuditSafely(env, job, "ignored", trace, startedAt);
-          message.ack();
+          acknowledge(message);
           continue;
         }
 
         await submitPaddleJob(job, env, trace, startedAt);
-        message.ack();
+        acknowledge(message);
       } catch (error) {
         await recordStat(env, "errors");
         trace.stage ??= "processing-error";
@@ -1875,6 +1911,7 @@ export default {
         message.retry({ delaySeconds: 30 });
       }
     }
+    await recordQueueStatSafely(env, "queueDeletes", queueDeletes);
   },
   async scheduled(_controller, env): Promise<void> {
     const [stateRows, inspectionRows, pendingQueue] = await Promise.all([

@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { env } from "cloudflare:test";
-import { getDailyStats, incrementDailyStat } from "../src/daily-stats";
+import {
+  getDailyStats,
+  incrementDailyStat,
+  incrementDailyStatBy,
+} from "../src/daily-stats";
 
 describe("daily processing stats", () => {
   it("tracks counters by Bangkok calendar day", async () => {
@@ -22,5 +26,17 @@ describe("daily processing stats", () => {
         incrementDailyStat(env.OPERATIONAL_COUNTERS, "received", now)),
     );
     expect((await getDailyStats(env.OPERATIONAL_COUNTERS, now)).received).toBe(20);
+  });
+
+  it("tracks batched queue operations", async () => {
+    const now = new Date("2026-07-25T00:00:00.000Z");
+    await incrementDailyStatBy(env.OPERATIONAL_COUNTERS, "queueWrites", 3, now);
+    await incrementDailyStatBy(env.OPERATIONAL_COUNTERS, "queueReads", 2, now);
+    await incrementDailyStatBy(env.OPERATIONAL_COUNTERS, "queueDeletes", 1, now);
+    expect(await getDailyStats(env.OPERATIONAL_COUNTERS, now)).toMatchObject({
+      queueWrites: 3,
+      queueReads: 2,
+      queueDeletes: 1,
+    });
   });
 });

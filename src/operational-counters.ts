@@ -30,6 +30,15 @@ export class OperationalCounterCoordinator extends DurableObject<Env> {
     return { accepted: true, value };
   }
 
+  async incrementBy(name: string, amount: number): Promise<CounterIncrementResult> {
+    const delta = Math.max(0, Math.floor(amount));
+    const key = `counter:${name}`;
+    const current = (await this.ctx.storage.get<number>(key)) ?? 0;
+    const value = current + delta;
+    if (value !== current) await this.ctx.storage.put(key, value);
+    return { accepted: true, value };
+  }
+
   async setAtLeast(name: string, minimum: number): Promise<number> {
     const key = `counter:${name}`;
     const current = (await this.ctx.storage.get<number>(key)) ?? 0;

@@ -21,6 +21,7 @@ import {
 const PROCESSING_ENABLED_KEY = "control:processing-enabled";
 const SESSION_COOKIE = "kplus_control_session";
 const SESSION_TTL_SECONDS = 8 * 60 * 60;
+const QUEUE_DAILY_FREE_LIMIT = 10_000;
 
 function securityHeaders(contentType = "text/html; charset=utf-8"): HeadersInit {
   return {
@@ -441,6 +442,19 @@ function controlPage(enabled: boolean, providers: ProviderStatus): string {
           : providers.googleVisionUsage >= 800
             ? `เริ่มเข้าเขตเตือน · คาดว่าเหลือ ${googleVisionRemaining} units`
             : `ตั้งค่าคีย์แล้ว · คาดว่าเหลือ ${googleVisionRemaining} units`;
+  const queueOperations = providers.dailyStats.queueWrites
+    + providers.dailyStats.queueReads
+    + providers.dailyStats.queueDeletes;
+  const queueRemaining = Math.max(QUEUE_DAILY_FREE_LIMIT - queueOperations, 0);
+  const queueTone = queueOperations >= QUEUE_DAILY_FREE_LIMIT * 0.9
+    ? "danger"
+    : queueOperations >= QUEUE_DAILY_FREE_LIMIT * 0.75
+      ? "warn"
+      : "ok";
+  const queuePercent = Math.min(
+    (queueOperations / QUEUE_DAILY_FREE_LIMIT) * 100,
+    100,
+  );
   const recentLogs = logCards(providers.logs);
   const updatedAt = bangkokTime(new Date());
   const versionId = escapeHtml(providers.versionId || "local");
@@ -500,9 +514,10 @@ function controlPage(enabled: boolean, providers: ProviderStatus): string {
     <div class="item"><small>OCR.space วันนี้</small><b class="${providers.ocrSpaceConfigured ? "ok" : "warn"}">${providers.ocrSpaceUsage} / ${OCR_SPACE_DAILY_LIMIT} รูป</b><div class="meter"><span></span></div><em>${ocrSpaceState}</em></div>
     <div class="item"><small>Workers AI</small><b class="${enabled ? "ok" : ""}">${enabled ? "พร้อมเป็นระบบสำรอง" : "ไม่ถูกเรียกใช้งาน"}</b><em>ระบบไม่สามารถอ่านโควตาคงเหลือจาก binding ได้</em></div>
     <div class="item"><small>Google Vision เดือนนี้ (ประมาณการ)</small><b class="${googleVisionTone}">${providers.googleVisionUsage} / ${GOOGLE_VISION_FREE_MONTHLY_UNITS} units</b><div class="meter"><span style="width:${Math.min((providers.googleVisionUsage / GOOGLE_VISION_FREE_MONTHLY_UNITS) * 100, 100)}%;background:${googleVisionTone === "danger" ? "#f06474" : googleVisionTone === "warn" ? "#ffd477" : "#30dc78"}"></span></div><em>${googleVisionState}</em></div>
+    <div class="item"><small>Cloudflare Queue วันนี้ (ประมาณการ)</small><b class="${queueTone}">${queueOperations.toLocaleString("en-US")} / ${QUEUE_DAILY_FREE_LIMIT.toLocaleString("en-US")} operations</b><div class="meter"><span style="width:${queuePercent}%;background:${queueTone === "danger" ? "#f06474" : queueTone === "warn" ? "#ffd477" : "#30dc78"}"></span></div><em>เหลือ ${queueRemaining.toLocaleString("en-US")} · เขียน ${providers.dailyStats.queueWrites.toLocaleString("en-US")} · อ่าน ${providers.dailyStats.queueReads.toLocaleString("en-US")} · ลบ ${providers.dailyStats.queueDeletes.toLocaleString("en-US")}</em></div>
     <div class="item"><small>คิวและกฎปัจจุบัน</small><b>Paddle 5 งาน · OCR.space 2 งาน · รวมผลตามกลุ่มและผู้ส่ง</b><em>รับเลขงาน 8 หลักก่อนรูป · KPLUS/K+/Thai QR Payment + SETTLEMENT + ยอด 1.22 หรือ -1.22</em></div>
   </div>
-  <div class="notice">OCR.space นับตามวันที่ประเทศไทย ส่วน Google Vision เป็นค่าประมาณรายเดือนที่นับเฉพาะคำขอสำเร็จจาก Worker นี้ตั้งแต่เริ่มใช้ตัวนับ ไม่รวมระบบอื่นใน Google Cloud Project การเปลี่ยนสถานะอาจใช้เวลาสั้น ๆ ก่อนมีผลครบทุกศูนย์ข้อมูล</div>
+  <div class="notice">OCR.space นับตามวันที่ประเทศไทย ส่วน Google Vision และ Queue เป็นค่าประมาณจากตัวนับของ Worker นี้ ตัวนับ Queue เริ่มเก็บตั้งแต่เวอร์ชันที่เปิดใช้การแสดงผล จึงไม่รวมยอดก่อนหน้านี้หรือระบบอื่นในบัญชี Cloudflare</div>
   <div class="log-actions"><div class="section-title">Log การตรวจล่าสุด 50 รูป</div><form class="clear-logs" method="get" action="/control/confirm"><input type="hidden" name="target" value="clear-logs"><button type="submit">ล้าง Log</button></form></div>
   <div class="logs">${recentLogs}</div></section></main></body></html>`;
 }

@@ -157,6 +157,8 @@ describe("processing control", () => {
     expect(page).toContain("รับเลขงาน 8 หลักก่อนรูป");
     expect(page).toContain("Log การตรวจล่าสุด 50 รูป");
     expect(page).toContain("0 / 1000 units");
+    expect(page).toContain("Cloudflare Queue");
+    expect(page).toContain("0 / 10,000 operations");
     expect(page).toContain("สถิติวันนี้");
     expect(page).toContain("รูปซ้ำที่กันไว้");
     expect(page).toContain("รีเฟรช");
