@@ -881,12 +881,22 @@ async function replyKplusFailure(
 }
 
 async function handleWebhook(request: Request, env: Env): Promise<Response> {
+  console.log(JSON.stringify({
+    event: "webhook_request_received",
+    method: request.method,
+    path: new URL(request.url).pathname,
+    hasSignature: Boolean(request.headers.get("x-line-signature")),
+  }));
   const signature = request.headers.get("x-line-signature");
-  if (!signature) return new Response("Missing signature", { status: 401 });
+  if (!signature) {
+    console.warn(JSON.stringify({ event: "webhook_rejected", reason: "missing-signature" }));
+    return new Response("Missing signature", { status: 401 });
+  }
 
   const body = await request.arrayBuffer();
   const receivedAtMs = Date.now();
   if (!(await verifyLineSignature(body, signature, env.LINE_CHANNEL_SECRET))) {
+    console.warn(JSON.stringify({ event: "webhook_rejected", reason: "invalid-signature" }));
     return new Response("Invalid signature", { status: 401 });
   }
 
