@@ -1,6 +1,7 @@
 import {
   acceptWorkerPaymentName,
   classifyKplusVisualCandidate,
+  combineReceiptEvidence,
   decideReceipt,
   formatKplusSuccess,
   formatDecision,
@@ -1126,6 +1127,37 @@ async function processImageJob(
         );
         hasKnownKplusEvidence ||= ocrSpaceInspection.isKplusReceipt;
         updateTraceFromInspection(trace, ocrSpaceInspection, "ocr-space");
+        if (paddleInspection) {
+          const combinedEvidence = combineReceiptEvidence(
+            paddleInspection,
+            ocrSpaceInspection,
+            expectedSale,
+            expectedVoid,
+            minConfidence,
+          );
+          if (combinedEvidence.decision.status === "pass") {
+            trace.stage = "paddle-ocrspace-combined";
+            const matchedAmount = combinedEvidence.inspection.observedAmounts.find(
+              (amount) =>
+                Math.abs(amount - expectedSale) < 0.005 ||
+                Math.abs(amount - expectedVoid) < 0.005,
+            ) ?? expectedSale;
+            console.log(JSON.stringify({
+              event: "ocr_positive_evidence_combined",
+              webhookEventId: job.webhookEventId,
+              providers: ["paddleocr", "ocr-space"],
+              matchedAmount,
+              ocrSpaceUsage,
+            }));
+            return replyKplusSuccess(
+              job,
+              matchedAmount,
+              "paddleocr+ocr-space",
+              env,
+              trace,
+            );
+          }
+        }
         if (ocrSpaceRoute === "pass") {
           const matchedAmount = ocrSpaceInspection.observedAmounts.find(
             (amount) =>

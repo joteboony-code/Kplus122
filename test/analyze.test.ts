@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   acceptWorkerPaymentName,
   VISIBLE_TEXT_PROMPT,
+  combineReceiptEvidence,
   decideReceipt,
   formatDecision,
   formatKplusSuccess,
@@ -115,6 +116,39 @@ describe("receipt decision", () => {
       expect(routeOcrSpaceDecision(decision, inspection)).toBe("pass");
     },
   );
+
+  it("combines KPLUS from PaddleOCR with SETTLEMENT and the amount from OCR.space", () => {
+    const paddle = inspectConfirmedReceiptText("CHANNEL: KPLUS");
+    const ocrSpace = inspectConfirmedReceiptText("SETTLEMENT\nAMT: THB 1.22");
+
+    const combined = combineReceiptEvidence(
+      paddle,
+      ocrSpace,
+      1.22,
+      -1.22,
+      0.65,
+    );
+
+    expect(combined.decision.status).toBe("pass");
+    expect(combined.inspection.isKplusReceipt).toBe(true);
+    expect(combined.inspection.hasSettlement).toBe(true);
+    expect(combined.inspection.observedAmounts).toContain(1.22);
+  });
+
+  it("does not pass combined evidence when no provider finds KPLUS", () => {
+    const first = inspectConfirmedReceiptText("SETTLEMENT");
+    const second = inspectConfirmedReceiptText("AMT: THB 1.22");
+
+    const combined = combineReceiptEvidence(
+      first,
+      second,
+      1.22,
+      -1.22,
+      0.65,
+    );
+
+    expect(combined.decision.status).toBe("uncertain");
+  });
 
   it.each([
     "CHANNEL: KPLUS\nTHAI QR PAYMENT\nAMT: THB 5.00",

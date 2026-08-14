@@ -263,6 +263,43 @@ export function decideReceipt(
     : { status: "fail", failures };
 }
 
+/**
+ * Combine evidence from two providers for the same image only. This lets a
+ * provider that reads the KPLUS marker and another that reads SETTLEMENT and
+ * the expected amount complete the decision without mixing separate images.
+ */
+export function combineReceiptEvidence(
+  first: ReceiptInspection,
+  second: ReceiptInspection,
+  expectedSale: number,
+  expectedVoid: number,
+  minConfidence: number,
+): { inspection: ReceiptInspection; decision: ReceiptDecision } {
+  const inspection: ReceiptInspection = {
+    isKplusReceipt: first.isKplusReceipt || second.isKplusReceipt,
+    hasSettlement: first.hasSettlement || second.hasSettlement,
+    observedAmounts: [...new Set([
+      ...first.observedAmounts,
+      ...second.observedAmounts,
+    ])],
+    labeledAmounts: [...new Set([
+      ...first.labeledAmounts,
+      ...second.labeledAmounts,
+    ])],
+    confidence: Math.max(first.confidence, second.confidence),
+    reason: `combined:first(${first.reason}); second(${second.reason})`,
+  };
+  return {
+    inspection,
+    decision: decideReceipt(
+      inspection,
+      expectedSale,
+      expectedVoid,
+      minConfidence,
+    ),
+  };
+}
+
 export function routeOcrSpaceDecision(
   decision: ReceiptDecision,
   inspection: ReceiptInspection,
