@@ -63,6 +63,10 @@ function controlDbWithLog(): D1Database {
             line_delivery_status: "sent",
             line_delivery_method: "reply",
             line_delivery_updated_at: 1_784_133_301,
+            evidence_json: JSON.stringify({ providerFindings: {
+              paddleocr: { kplus: true, settlement: false, amounts: [40, -40] },
+              "ocr-space": { kplus: true, settlement: true, amounts: [1.22, -1.22] },
+            } }),
           }],
         }),
       } as unknown as D1PreparedStatement;
@@ -252,6 +256,9 @@ describe("processing control", () => {
     expect(page).toContain("&lt;script&gt;alert(1)&lt;/script&gt;");
     expect(page).not.toContain("<script>alert(1)</script>");
     expect(page).toContain("PaddleOCR · 1.22s</span>");
+    expect(page).toContain("KPLUS: พบ");
+    expect(page).toContain("SETTLEMENT: ไม่พบ");
+    expect(page).toContain("OCR.space");
   });
 
   it("asks for confirmation before clearing inspection logs", async () => {

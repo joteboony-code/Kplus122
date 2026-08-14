@@ -7,6 +7,7 @@ import { getDailyStats, type DailyStats } from "./daily-stats";
 import {
   clearInspectionLogs,
   listInspectionLogs,
+  type ProviderFinding,
   type InspectionLogRow,
 } from "./audit-log";
 import {
@@ -256,6 +257,23 @@ function ocrProviderBadges(log: InspectionLogRow): OcrProviderBadge[] {
   return [...badges.values()];
 }
 
+function providerFindingRows(log: InspectionLogRow): string {
+  if (!log.evidence_json) return "";
+  try {
+    const parsed = JSON.parse(log.evidence_json) as { providerFindings?: Record<string, ProviderFinding> };
+    const findings = parsed.providerFindings;
+    if (!findings) return "";
+    const labels: Record<string, string> = { paddleocr: "PaddleOCR", "ocr-space": "OCR.space", "workers-ai": "Workers AI", "google-vision": "Google Vision" };
+    const rows = Object.entries(findings).filter(([key]) => labels[key]).map(([key, finding]) => {
+      const amounts = finding.amounts?.length ? finding.amounts.slice(0, 8).join(", ") : "ไม่พบ";
+      return `<div class="provider-finding" style="display:flex;flex-wrap:wrap;gap:5px;align-items:center;line-height:1.4"><b style="color:#c9ffe0">${labels[key]}</b><span>KPLUS: ${finding.kplus ? "พบ" : "ไม่พบ"}</span><span>SETTLEMENT: ${finding.settlement ? "พบ" : "ไม่พบ"}</span><span>ยอด: ${escapeHtml(amounts)}</span></div>`;
+    }).join("");
+    return rows ? `<div class="provider-findings" style="grid-column:1/-1;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:5px;margin-top:2px;padding:6px 8px;border:1px solid #294537;border-radius:8px;background:#08140d;color:#9db1a6;font-size:9px" aria-label="ผลที่พบแยกตาม provider">${rows}</div>` : "";
+  } catch {
+    return "";
+  }
+}
+
 function formatProviderTime(milliseconds: number): string {
   return milliseconds > 0 ? ` · ${(milliseconds / 1000).toFixed(2)}s` : "";
 }
@@ -423,6 +441,7 @@ function logCards(logs: InspectionLogRow[]): string {
       }
     }
     const providers = ocrProviderBadges(log);
+    const providerFindings = providerFindingRows(log);
     const providerBadges = providers.length > 0
       ? providers.map((provider) =>
           `<span class="evidence-chip provider" title="ใช้เวลา ${provider.milliseconds}ms"><i>${provider.icon}</i>${provider.label}${formatProviderTime(provider.milliseconds)}</span>`,
@@ -449,6 +468,7 @@ function logCards(logs: InspectionLogRow[]): string {
         <span class="evidence-chip ${settlementState.css}"><i>${settlementState.css === "found" ? "✓" : settlementState.css === "missing" ? "✕" : "?"}</i>${settlementState.text}</span>
         ${providerBadges}
         </div>
+        ${providerFindings}
         <span class="delivery-chip ${deliveryState.css}">${deliveryState.text}</span>
         <div class="log-meta"><time>${escapeHtml(time)}</time><span>${log.processing_ms}ms${log.queue_delay_ms === null ? "" : ` · รอคิว ${log.queue_delay_ms}ms`}</span></div>
       </div>

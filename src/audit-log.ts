@@ -5,6 +5,12 @@ export const AUDIT_RETENTION_SECONDS = 7 * 24 * 60 * 60;
 export type LineDeliveryStatus = "not_applicable" | "pending" | "sent" | "failed";
 export type LineDeliveryMethod = "reply" | "push";
 
+export interface ProviderFinding {
+  kplus: boolean;
+  settlement: boolean;
+  amounts: number[];
+}
+
 export interface InspectionTrace {
   providers: string[];
   providerTimings: Record<string, number>;
@@ -13,6 +19,7 @@ export interface InspectionTrace {
   observedAmounts?: number[];
   hasKplus?: boolean;
   hasSettlement?: boolean;
+  providerFindings?: Record<string, ProviderFinding>;
   lineDeliveryStatus?: LineDeliveryStatus;
   lineDeliveryMethod?: LineDeliveryMethod;
 }
@@ -61,6 +68,7 @@ export async function recordInspectionLog(
     kplus: trace.hasKplus ?? null,
     settlement: trace.hasSettlement ?? null,
     amounts: (trace.observedAmounts ?? []).slice(0, 8),
+    providerFindings: trace.providerFindings ?? null,
     imageSet: job.imageSetId
       ? {
           id: job.imageSetId,

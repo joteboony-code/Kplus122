@@ -364,6 +364,21 @@ function updateTraceFromInspection(
   trace.hasKplus = Boolean(trace.hasKplus || inspection.isKplusReceipt);
   trace.hasSettlement = inspection.hasSettlement;
   trace.observedAmounts = inspection.observedAmounts;
+  const providerKey = stage.startsWith("paddleocr")
+    ? "paddleocr"
+    : stage === "ocr-space"
+      ? "ocr-space"
+      : stage.startsWith("workers-ai")
+        ? "workers-ai"
+        : stage === "google-vision"
+          ? "google-vision"
+          : stage;
+  trace.providerFindings ??= {};
+  trace.providerFindings[providerKey] = {
+    kplus: inspection.isKplusReceipt,
+    settlement: inspection.hasSettlement,
+    amounts: inspection.observedAmounts.slice(0, 8),
+  };
 }
 
 async function recordStat(env: Env, name: DailyStatName): Promise<void> {
