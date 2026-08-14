@@ -597,26 +597,6 @@ function controlPage(enabled: boolean, providers: ProviderStatus): string {
   <div class="notice">OCR.space นับตามวันที่ประเทศไทย ส่วน Google Vision และ Queue เป็นค่าประมาณจากตัวนับของ Worker นี้ ตัวนับ Queue เริ่มเก็บตั้งแต่เวอร์ชันที่เปิดใช้การแสดงผล จึงไม่รวมยอดก่อนหน้านี้หรือระบบอื่นในบัญชี Cloudflare</div>
   <div class="log-actions"><div class="section-title">Log การตรวจล่าสุด 50 รูป <span id="active-inspections" style="display:inline-block;margin-left:10px;padding:5px 10px;border:1px solid #2bc96c;border-radius:999px;color:#79f5a8;font-size:11px;font-weight:800">กำลังตรวจ ${providers.activeImages} รูป</span></div><form class="clear-logs" method="get" action="/control/confirm"><input type="hidden" name="target" value="clear-logs"><button type="submit">ล้าง Log</button></form></div>
   <div class="logs" id="inspection-logs">${recentLogs}</div></section></main><script>
-    (() => {
-      const logs = document.getElementById("inspection-logs");
-      if (!logs) return;
-      let loading = false;
-      const refreshLogs = async () => {
-        if (loading || document.hidden) return;
-        loading = true;
-        try {
-          const response = await fetch("/control/api/logs", { cache: "no-store" });
-          if (response.ok) {
-            const payload = await response.json();
-            if (typeof payload.html === "string") logs.innerHTML = payload.html;
-            const active = document.getElementById("active-inspections");
-            if (active && Number.isFinite(payload.activeImages)) active.textContent = "กำลังตรวจ " + payload.activeImages + " รูป";
-          }
-        } catch { /* Keep the last visible log when a refresh is interrupted. */ }
-        finally { loading = false; }
-      };
-      window.setInterval(refreshLogs, 5000);
-    })();
   </script></body></html>`;
 }
 
