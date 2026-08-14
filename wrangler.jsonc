@@ -77,7 +77,8 @@
         "queue": "kplus122-images",
         "max_batch_size": 1,
         "max_batch_timeout": 1,
-        "max_retries": 1
+        "max_retries": 1,
+        "max_concurrency": 5
       },
       {
         "queue": "kplus122-ocr-fallback",
