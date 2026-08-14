@@ -251,7 +251,7 @@ describe("processing control", () => {
     expect(page).toContain("AMT THB 1.22");
     expect(page).toContain("&lt;script&gt;alert(1)&lt;/script&gt;");
     expect(page).not.toContain("<script>alert(1)</script>");
-    expect(page).toContain("PaddleOCR</span>");
+    expect(page).toContain("PaddleOCR · 1.22s</span>");
   });
 
   it("asks for confirmation before clearing inspection logs", async () => {

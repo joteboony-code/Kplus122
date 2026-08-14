@@ -213,6 +213,53 @@ function escapeHtml(value: string): string {
     .replaceAll("'", "&#39;");
 }
 
+interface OcrProviderBadge {
+  key: string;
+  label: string;
+  icon: string;
+  milliseconds: number;
+}
+
+function ocrProviderBadges(log: InspectionLogRow): OcrProviderBadge[] {
+  const timings: Record<string, number> = {};
+  if (log.provider_timings) {
+    try {
+      Object.assign(timings, JSON.parse(log.provider_timings) as Record<string, number>);
+    } catch {
+      // Keep rendering the provider list even if an old log has malformed timing JSON.
+    }
+  }
+
+  const badges = new Map<string, OcrProviderBadge>();
+  for (const rawName of (log.provider_chain ?? "").split(">")) {
+    const name = rawName.trim().toLowerCase();
+    if (!name) continue;
+    const provider = name.includes("paddleocr")
+      ? { key: "paddleocr", label: "PaddleOCR", icon: "P" }
+      : name === "ocr-space"
+        ? { key: "ocr-space", label: "OCR.space", icon: "O" }
+        : name.startsWith("workers-ai")
+          ? { key: "workers-ai", label: "Workers AI", icon: "W" }
+          : name === "google-vision"
+            ? { key: "google-vision", label: "Google Vision", icon: "G" }
+            : null;
+    if (!provider || badges.has(provider.key)) continue;
+    const milliseconds = Object.entries(timings)
+      .filter(([timingName]) => {
+        if (provider.key === "paddleocr") return timingName.includes("paddleocr");
+        if (provider.key === "workers-ai") return timingName.startsWith("workers-ai");
+        return timingName === provider.key;
+      })
+      .reduce((total, [, value]) => total + (Number.isFinite(value) ? value : 0), 0);
+    badges.set(provider.key, { ...provider, milliseconds });
+  }
+  return [...badges.values()];
+}
+
+function formatProviderTime(milliseconds: number): string {
+  return milliseconds > 0 ? ` · ${(milliseconds / 1000).toFixed(2)}s` : "";
+}
+
 function technicianForm(
   mention?: ServiceAreaMention,
   draft?: Partial<ServiceAreaMentionInput>,
@@ -375,7 +422,13 @@ function logCards(logs: InspectionLogRow[]): string {
         timing = log.provider_timings;
       }
     }
-    const usedPaddle = (log.provider_chain ?? "").includes("paddleocr");
+    const providers = ocrProviderBadges(log);
+    const providerBadges = providers.length > 0
+      ? providers.map((provider) =>
+          `<span class="evidence-chip provider" title="ใช้เวลา ${provider.milliseconds}ms"><i>${provider.icon}</i>${provider.label}${formatProviderTime(provider.milliseconds)}</span>`,
+        ).join("")
+      : '<span class="evidence-chip unknown"><i>?</i>ไม่พบข้อมูลระบบ OCR</span>';
+    const usedPaddle = providers.some((provider) => provider.key === "paddleocr");
     const paddleResult = usedPaddle
       ? `<section class="paddle-result"><b>ผลข้อความจาก PaddleOCR</b>${
           log.paddle_ocr_text?.trim()
@@ -394,7 +447,7 @@ function logCards(logs: InspectionLogRow[]): string {
         <div class="evidence-row" aria-label="หลักฐานที่ตรวจพบ">
         <span class="evidence-chip ${kplusState.css}"><i>${kplusState.css === "found" ? "✓" : kplusState.css === "missing" ? "✕" : "?"}</i>${kplusState.text}</span>
         <span class="evidence-chip ${settlementState.css}"><i>${settlementState.css === "found" ? "✓" : settlementState.css === "missing" ? "✕" : "?"}</i>${settlementState.text}</span>
-        ${usedPaddle ? '<span class="evidence-chip provider"><i>P</i>PaddleOCR</span>' : ""}
+        ${providerBadges}
         </div>
         <span class="delivery-chip ${deliveryState.css}">${deliveryState.text}</span>
         <div class="log-meta"><time>${escapeHtml(time)}</time><span>${log.processing_ms}ms${log.queue_delay_ms === null ? "" : ` · รอคิว ${log.queue_delay_ms}ms`}</span></div>
