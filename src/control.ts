@@ -27,7 +27,7 @@ const QUEUE_DAILY_FREE_LIMIT = 10_000;
 function securityHeaders(contentType = "text/html; charset=utf-8"): HeadersInit {
   return {
     "Cache-Control": "no-store, max-age=0",
-    "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
+    "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
     "Content-Type": contentType,
     "Referrer-Policy": "no-referrer",
     "X-Content-Type-Options": "nosniff",
@@ -595,7 +595,26 @@ function controlPage(enabled: boolean, providers: ProviderStatus): string {
   </div>
   <div class="notice">OCR.space นับตามวันที่ประเทศไทย ส่วน Google Vision และ Queue เป็นค่าประมาณจากตัวนับของ Worker นี้ ตัวนับ Queue เริ่มเก็บตั้งแต่เวอร์ชันที่เปิดใช้การแสดงผล จึงไม่รวมยอดก่อนหน้านี้หรือระบบอื่นในบัญชี Cloudflare</div>
   <div class="log-actions"><div class="section-title">Log การตรวจล่าสุด 50 รูป</div><form class="clear-logs" method="get" action="/control/confirm"><input type="hidden" name="target" value="clear-logs"><button type="submit">ล้าง Log</button></form></div>
-  <div class="logs">${recentLogs}</div></section></main></body></html>`;
+  <div class="logs" id="inspection-logs">${recentLogs}</div></section></main><script>
+    (() => {
+      const logs = document.getElementById("inspection-logs");
+      if (!logs) return;
+      let loading = false;
+      const refreshLogs = async () => {
+        if (loading || document.hidden) return;
+        loading = true;
+        try {
+          const response = await fetch("/control/api/logs", { cache: "no-store" });
+          if (response.ok) {
+            const payload = await response.json();
+            if (typeof payload.html === "string") logs.innerHTML = payload.html;
+          }
+        } catch { /* Keep the last visible log when a refresh is interrupted. */ }
+        finally { loading = false; }
+      };
+      window.setInterval(refreshLogs, 5000);
+    })();
+  </script></body></html>`;
 }
 
 async function safeInspectionLogs(db: D1Database): Promise<InspectionLogRow[]> {
@@ -702,6 +721,16 @@ export async function handleControlRequest(
       return htmlResponse("Invalid confirmation target", 400);
     }
     return htmlResponse(confirmPage(target));
+  }
+
+  if (request.method === "GET" && url.pathname === "/control/api/logs") {
+    const logs = await safeInspectionLogs(env.CONTROL_DB);
+    return new Response(JSON.stringify({ html: logCards(logs) }), {
+      headers: {
+        ...securityHeaders("application/json; charset=utf-8"),
+        "Cache-Control": "no-store, max-age=0",
+      },
+    });
   }
 
   if (request.method === "GET" && (url.pathname === "/control" || url.pathname === "/control/")) {
