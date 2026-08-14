@@ -882,6 +882,19 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
     return new Response("Invalid JSON", { status: 400 });
   }
 
+  console.log(JSON.stringify({
+    event: "line_webhook_received",
+    eventCount: payload.events?.length ?? 0,
+    imageEvents: (payload.events ?? [])
+      .filter((event) => event.type === "message" && event.message?.type === "image")
+      .map((event) => ({
+        messageId: event.message?.id,
+        imageSetId: event.message?.imageSet?.id,
+        imageSetIndex: event.message?.imageSet?.index,
+        imageSetTotal: event.message?.imageSet?.total,
+      })),
+  }));
+
   const operationalState = d1StateStore(env.CONTROL_DB);
   const imageJobs: ImageJob[] = [];
   for (const event of payload.events ?? []) {
@@ -1003,6 +1016,12 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
       imageCount: imageJobs.length,
       queued: enqueueResult.queued,
       deferred: enqueueResult.deferred,
+      imageSets: imageJobs.map((job) => ({
+        messageId: job.messageId,
+        imageSetId: job.imageSetId,
+        imageSetIndex: job.imageSetIndex,
+        imageSetTotal: job.imageSetTotal,
+      })),
     }));
     return Response.json({
       accepted: imageJobs.length,
@@ -1020,6 +1039,18 @@ async function processQueuedWebhookEvents(
   env: Env,
   receivedAtMs = Date.now(),
 ): Promise<void> {
+  console.log(JSON.stringify({
+    event: "line_webhook_queue_received",
+    eventCount: events.length,
+    imageEvents: events
+      .filter((event) => event.type === "message" && event.message?.type === "image")
+      .map((event) => ({
+        messageId: event.message?.id,
+        imageSetId: event.message?.imageSet?.id,
+        imageSetIndex: event.message?.imageSet?.index,
+        imageSetTotal: event.message?.imageSet?.total,
+      })),
+  }));
   if (!(await isProcessingEnabled(
     env.CONTROL_DB,
     String(env.PROCESSING_FORCE_DISABLED) === "true",
@@ -1072,7 +1103,20 @@ async function processQueuedWebhookEvents(
       if (await claimImageQueue(job, queueState)) queueJobs.push(job);
     }
     await recordReplyTokens(queueJobs, env);
-    await enqueueImageJobs(queueJobs, env);
+    const enqueueResult = await enqueueImageJobs(queueJobs, env);
+    console.log(JSON.stringify({
+      event: "image_jobs_enqueued",
+      route: "line-webhook-queue",
+      imageCount: jobs.length,
+      queued: enqueueResult.queued,
+      deferred: enqueueResult.deferred,
+      imageSets: jobs.map((job) => ({
+        messageId: job.messageId,
+        imageSetId: job.imageSetId,
+        imageSetIndex: job.imageSetIndex,
+        imageSetTotal: job.imageSetTotal,
+      })),
+    }));
   }
 }
 
