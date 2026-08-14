@@ -321,10 +321,17 @@ async function postLineMessage(
   });
 
   if (!response.ok) {
+    let detail = "";
+    try {
+      detail = (await response.text()).slice(0, 500);
+    } catch {
+      detail = "response body unavailable";
+    }
     console.error(JSON.stringify({
       event: "line_message_failed",
       path,
       status: response.status,
+      detail,
     }));
     return false;
   }

@@ -123,6 +123,28 @@ import {
 } from "./types";
 
 type ProcessOutcome = "pass" | "fail" | "ignored";
+
+// LINE reply tokens are documented as short-lived and single-use. Keep a
+// safety margin so a token is never intentionally sent at the edge of expiry.
+const MAX_REPLY_TOKEN_AGE_MS = 45_000;
+
+function assertFreshReplyToken(
+  job: ImageJob,
+  selected: RoundReplyTokenSelection | null,
+): void {
+  const receivedAtMs = selected?.receivedAtMs ?? job.replyTokenReceivedAtMs ?? job.timestamp;
+  if (typeof receivedAtMs !== "number" || !Number.isFinite(receivedAtMs)) return;
+  const ageMs = Math.max(0, Date.now() - receivedAtMs);
+  if (ageMs < MAX_REPLY_TOKEN_AGE_MS) return;
+  console.warn(JSON.stringify({
+    event: "reply_token_expired_before_delivery",
+    messageId: job.messageId,
+    sourceMessageId: selected?.messageId ?? job.messageId,
+    referenceCode: job.referenceCode,
+    ageMs,
+  }));
+  throw new Error(`LINE reply token too old for delivery (${ageMs}ms)`);
+}
 interface ProcessResult {
   outcome: ProcessOutcome;
   evidence?: Omit<RoundEvidence, "job">;
@@ -640,6 +662,7 @@ async function replyStockFlexOnce(
     ? { ...job, replyToken: selectedReply.replyToken }
     : job;
   try {
+    assertFreshReplyToken(job, selectedReply);
     const sent = await sendReplyMessages(
       replyJob,
       [stockFlexMessage(job.referenceCode)],
@@ -703,6 +726,7 @@ async function replyKplusSuccess(
     ? { ...job, replyToken: selectedReply.replyToken }
     : job;
   try {
+    assertFreshReplyToken(job, selectedReply);
     method = await sendInspectionResultWithMethod(
       replyJob,
       formatKplusSuccess(amount),
@@ -778,6 +802,7 @@ async function replyKplusFailure(
     ? { ...job, replyToken: selectedReply.replyToken }
     : job;
   try {
+    assertFreshReplyToken(job, selectedReply);
     const method = await sendInspectionResultWithMethod(
       replyJob,
       text,
@@ -1533,28 +1558,17 @@ async function submitPaddleJob(
       if (pollCount + 1 < PADDLEOCR_INLINE_POLLS) await waitForPaddlePoll();
     }
 
-    const delayedPoll: PaddlePollJob = {
-      kind: "paddle-poll",
+    // Reply tokens are short-lived and cannot be replaced with Push API.
+    // Continue through the fast fallback chain now instead of waiting for a
+    // delayed Paddle poll that would usually outlive the reply-token window.
+    downstreamStarted = true;
+    await processPaddleFallbackInline(
       job,
-      paddleJobId: jobId,
-      pollCount: PADDLEOCR_INLINE_POLLS,
-    };
-    try {
-      await env.IMAGE_QUEUE.send(
-        delayedPoll,
-        { delaySeconds: PADDLEOCR_POLL_DELAY_SECONDS },
-      );
-      await recordQueueStatSafely(env, "queueWrites", 1);
-    } catch (error) {
-      downstreamStarted = true;
-      await processPaddleFallbackInline(
-        job,
-        `PaddleOCR delayed poll queue failed: ${queueErrorText(error)}`,
-        env,
-        trace,
-        startedAt,
-      );
-    }
+      "PaddleOCR remained pending after inline polls; continuing with fallback OCR",
+      env,
+      trace,
+      startedAt,
+    );
   } catch (error) {
     if (downstreamStarted) throw error;
     await processPaddleFallbackInline(
