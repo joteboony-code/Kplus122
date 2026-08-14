@@ -91,3 +91,23 @@ export async function incrementDailyStatBy(
   const result = await counters.getByName(counterId(now)).incrementBy(name, amount);
   return result.value;
 }
+
+export async function claimActiveImage(
+  counters: OperationalCounterNamespace,
+  messageId: string,
+): Promise<number> {
+  return counters.getByName("active-inspections").claimActiveImage(messageId);
+}
+
+export async function releaseActiveImage(
+  counters: OperationalCounterNamespace,
+  messageId: string,
+): Promise<number> {
+  return counters.getByName("active-inspections").releaseActiveImage(messageId);
+}
+
+export async function getActiveImageCount(
+  counters: OperationalCounterNamespace,
+): Promise<number> {
+  return counters.getByName("active-inspections").getActiveImageCount();
+}

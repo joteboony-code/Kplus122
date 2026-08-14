@@ -3,7 +3,7 @@ import {
   getGoogleVisionUsage,
   GOOGLE_VISION_FREE_MONTHLY_UNITS,
 } from "./google-vision-usage";
-import { getDailyStats, type DailyStats } from "./daily-stats";
+import { getActiveImageCount, getDailyStats, type DailyStats } from "./daily-stats";
 import {
   clearInspectionLogs,
   listInspectionLogs,
@@ -203,6 +203,7 @@ interface ProviderStatus {
   logs: InspectionLogRow[];
   versionId: string;
   versionTimestamp: string;
+  activeImages: number;
 }
 
 function escapeHtml(value: string): string {
@@ -594,7 +595,7 @@ function controlPage(enabled: boolean, providers: ProviderStatus): string {
     <div class="item"><small>คิวและกฎปัจจุบัน</small><b>Paddle 5 งาน · OCR.space 2 งาน · รวมผลตามกลุ่มและผู้ส่ง</b><em>รับเลขงาน 8 หลักก่อนรูป · KPLUS/K+/Thai QR Payment + SETTLEMENT + ยอด 1.22 หรือ -1.22</em></div>
   </div>
   <div class="notice">OCR.space นับตามวันที่ประเทศไทย ส่วน Google Vision และ Queue เป็นค่าประมาณจากตัวนับของ Worker นี้ ตัวนับ Queue เริ่มเก็บตั้งแต่เวอร์ชันที่เปิดใช้การแสดงผล จึงไม่รวมยอดก่อนหน้านี้หรือระบบอื่นในบัญชี Cloudflare</div>
-  <div class="log-actions"><div class="section-title">Log การตรวจล่าสุด 50 รูป</div><form class="clear-logs" method="get" action="/control/confirm"><input type="hidden" name="target" value="clear-logs"><button type="submit">ล้าง Log</button></form></div>
+  <div class="log-actions"><div class="section-title">Log การตรวจล่าสุด 50 รูป <span id="active-inspections" style="display:inline-block;margin-left:10px;padding:5px 10px;border:1px solid #2bc96c;border-radius:999px;color:#79f5a8;font-size:11px;font-weight:800">กำลังตรวจ ${providers.activeImages} รูป</span></div><form class="clear-logs" method="get" action="/control/confirm"><input type="hidden" name="target" value="clear-logs"><button type="submit">ล้าง Log</button></form></div>
   <div class="logs" id="inspection-logs">${recentLogs}</div></section></main><script>
     (() => {
       const logs = document.getElementById("inspection-logs");
@@ -608,6 +609,8 @@ function controlPage(enabled: boolean, providers: ProviderStatus): string {
           if (response.ok) {
             const payload = await response.json();
             if (typeof payload.html === "string") logs.innerHTML = payload.html;
+            const active = document.getElementById("active-inspections");
+            if (active && Number.isFinite(payload.activeImages)) active.textContent = "กำลังตรวจ " + payload.activeImages + " รูป";
           }
         } catch { /* Keep the last visible log when a refresh is interrupted. */ }
         finally { loading = false; }
@@ -724,8 +727,11 @@ export async function handleControlRequest(
   }
 
   if (request.method === "GET" && url.pathname === "/control/api/logs") {
-    const logs = await safeInspectionLogs(env.CONTROL_DB);
-    return new Response(JSON.stringify({ html: logCards(logs) }), {
+    const [logs, activeImages] = await Promise.all([
+      safeInspectionLogs(env.CONTROL_DB),
+      getActiveImageCount(env.OPERATIONAL_COUNTERS),
+    ]);
+    return new Response(JSON.stringify({ html: logCards(logs), activeImages }), {
       headers: {
         ...securityHeaders("application/json; charset=utf-8"),
         "Cache-Control": "no-store, max-age=0",
@@ -734,7 +740,7 @@ export async function handleControlRequest(
   }
 
   if (request.method === "GET" && (url.pathname === "/control" || url.pathname === "/control/")) {
-    const [enabled, ocrSpaceUsage, googleVisionUsage, dailyStats, logs] = await Promise.all([
+    const [enabled, ocrSpaceUsage, googleVisionUsage, dailyStats, logs, activeImages] = await Promise.all([
       isProcessingEnabled(
         env.CONTROL_DB,
         String(env.PROCESSING_FORCE_DISABLED) === "true",
@@ -743,6 +749,7 @@ export async function handleControlRequest(
       getGoogleVisionUsage(env.OPERATIONAL_COUNTERS),
       getDailyStats(env.OPERATIONAL_COUNTERS),
       safeInspectionLogs(env.CONTROL_DB),
+      getActiveImageCount(env.OPERATIONAL_COUNTERS),
     ]);
     return htmlResponse(controlPage(enabled, {
       paddleOcrConfigured: Boolean(env.PADDLEOCR_TOKEN),
@@ -754,6 +761,7 @@ export async function handleControlRequest(
       logs,
       versionId: env.CF_VERSION_METADATA?.id ?? "local",
       versionTimestamp: env.CF_VERSION_METADATA?.timestamp ?? "",
+      activeImages,
     }));
   }
 

@@ -24,6 +24,8 @@ import {
 import {
   incrementDailyStat,
   incrementDailyStatBy,
+  claimActiveImage,
+  releaseActiveImage,
   type DailyStatName,
 } from "./daily-stats";
 import { ocrSpaceOcr } from "./ocr-space";
@@ -449,6 +451,11 @@ async function sendQueueBodies(
         body: body as ImageJob | RoundFinalizeJob | FailureFinalizeJob | PaddlePollJob,
       })),
     );
+    const imageJobs = bodies.filter(
+      (body): body is ImageJob =>
+        !("kind" in body) && "messageId" in body && "webhookEventId" in body,
+    );
+    await Promise.all(imageJobs.map((job) => claimActiveImageSafely(env, job.messageId)));
     await recordQueueStatSafely(env, "queueWrites", bodies.length);
     return;
   }
@@ -518,6 +525,30 @@ async function recordQueueStatSafely(
       event: "queue_stat_record_failed",
       stat: name,
       amount,
+      error: error instanceof Error ? error.message : "unknown error",
+    }));
+  }
+}
+
+async function releaseActiveImageSafely(env: Env, messageId: string): Promise<void> {
+  try {
+    await releaseActiveImage(env.OPERATIONAL_COUNTERS, messageId);
+  } catch (error) {
+    console.warn(JSON.stringify({
+      event: "active_image_release_failed",
+      messageId,
+      error: error instanceof Error ? error.message : "unknown error",
+    }));
+  }
+}
+
+async function claimActiveImageSafely(env: Env, messageId: string): Promise<void> {
+  try {
+    await claimActiveImage(env.OPERATIONAL_COUNTERS, messageId);
+  } catch (error) {
+    console.warn(JSON.stringify({
+      event: "active_image_claim_failed",
+      messageId,
       error: error instanceof Error ? error.message : "unknown error",
     }));
   }
@@ -1879,6 +1910,7 @@ async function finalizeImageResult(
         : "ignored",
   );
   await recordAuditSafely(env, job, result.outcome, trace, startedAt);
+  await releaseActiveImageSafely(env, job.messageId);
 }
 
 async function processPaddlePoll(
@@ -2141,6 +2173,9 @@ export default {
           messageId: "messageId" in body ? body.messageId :
             "job" in body ? body.job.messageId : undefined,
         }));
+        if (!("kind" in body) && "messageId" in body) {
+          await releaseActiveImageSafely(env, body.messageId);
+        }
         acknowledge(message);
         continue;
       }
@@ -2236,6 +2271,7 @@ export default {
           }));
           await completeStockRoundImage(job, env);
           await recordAuditSafely(env, job, "ignored", trace, startedAt);
+          await releaseActiveImageSafely(env, job.messageId);
           acknowledge(message);
           continue;
         }
@@ -2255,6 +2291,7 @@ export default {
           await recordStat(env, "processed");
           await recordStat(env, "ignored");
           await recordAuditSafely(env, job, "ignored", trace, startedAt);
+          await releaseActiveImageSafely(env, job.messageId);
           acknowledge(message);
           continue;
         }
