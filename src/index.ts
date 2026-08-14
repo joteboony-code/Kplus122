@@ -612,25 +612,34 @@ async function selectReplyToken(
   const roundKey = receiptRoundKey(job);
   if (!roundKey) return null;
   try {
-    const selected = await env.RECEIPT_ROUNDS.getByName(roundKey).selectReplyToken(job);
+    const now = Date.now();
+    const ownReceivedAtMs = job.replyTokenReceivedAtMs;
+    const ownToken = typeof ownReceivedAtMs === "number" &&
+        Number.isFinite(ownReceivedAtMs) &&
+        now - ownReceivedAtMs < MAX_REPLY_TOKEN_AGE_MS
+      ? {
+          messageId: job.messageId,
+          replyToken: job.replyToken,
+          receivedAtMs: ownReceivedAtMs,
+        }
+      : null;
+    const stored = await env.RECEIPT_ROUNDS.getByName(roundKey).selectReplyToken(job);
+    const storedFresh = stored && now - stored.receivedAtMs < MAX_REPLY_TOKEN_AGE_MS
+      ? stored
+      : null;
+    const selected = ownToken && (!storedFresh || ownToken.receivedAtMs >= storedFresh.receivedAtMs)
+      ? ownToken
+      : storedFresh;
     if (!selected) return null;
-    const ageMs = Math.max(0, Date.now() - selected.receivedAtMs);
+    const ageMs = Math.max(0, now - selected.receivedAtMs);
     console.log(JSON.stringify({
       event: "reply_token_selected",
       messageId: job.messageId,
       sourceMessageId: selected.messageId,
       referenceCode: job.referenceCode,
       ageMs,
+      source: selected.messageId === job.messageId ? "current-job" : "round-latest",
     }));
-    if (ageMs >= 50_000) {
-      console.warn(JSON.stringify({
-        event: "reply_token_age_warning",
-        messageId: job.messageId,
-        sourceMessageId: selected.messageId,
-        referenceCode: job.referenceCode,
-        ageMs,
-      }));
-    }
     return selected;
   } catch (error) {
     console.error(JSON.stringify({
