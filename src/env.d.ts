@@ -4,6 +4,7 @@ interface Env {
   GOOGLE_VISION_API_KEY?: string;
   OCR_SPACE_API_KEY?: string;
   PADDLEOCR_TOKEN?: string;
+  PADDLEOCR_TOKEN_2?: string;
   PADDLEOCR_MODEL?: string;
   CONTROL_PASSWORD: string;
   CASTLE_SERVICE: import("./service-look").CastleServiceBinding;

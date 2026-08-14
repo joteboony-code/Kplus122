@@ -128,6 +128,21 @@ type ProcessOutcome = "pass" | "fail" | "ignored";
 // safety margin so a token is never intentionally sent at the edge of expiry.
 const MAX_REPLY_TOKEN_AGE_MS = 45_000;
 
+function paddleTokenForJob(job: ImageJob, env: Env): { token: string; slot: 1 | 2 } | null {
+  const primary = env.PADDLEOCR_TOKEN?.trim();
+  const secondary = env.PADDLEOCR_TOKEN_2?.trim();
+  if (!primary && !secondary) return null;
+  if (!secondary) return primary ? { token: primary, slot: 1 } : null;
+  const key = `${job.imageSetId ?? job.messageId}:${job.imageSetIndex ?? 0}`;
+  let hash = 0;
+  for (let index = 0; index < key.length; index += 1) {
+    hash = (hash * 31 + key.charCodeAt(index)) >>> 0;
+  }
+  return hash % 2 === 0
+    ? { token: primary ?? secondary, slot: primary ? 1 : 2 }
+    : { token: secondary, slot: 2 };
+}
+
 function assertFreshReplyToken(
   job: ImageJob,
   selected: RoundReplyTokenSelection | null,
@@ -1578,8 +1593,8 @@ async function submitPaddleJob(
   trace: InspectionTrace,
   startedAt: number,
 ): Promise<void> {
-  const token = env.PADDLEOCR_TOKEN?.trim();
-  if (!token) {
+  const paddle = paddleTokenForJob(job, env);
+  if (!paddle) {
     await processPaddleFallbackInline(
       job,
       "PADDLEOCR_TOKEN is not configured",
@@ -1602,7 +1617,7 @@ async function submitPaddleJob(
       );
       jobId = await submitPaddleOcr(
         image,
-        token,
+        paddle.token,
         env.PADDLEOCR_MODEL?.trim() || DEFAULT_PADDLEOCR_MODEL,
       );
       await store.put(key, jobId, { expirationTtl: 24 * 60 * 60 });
@@ -1616,7 +1631,7 @@ async function submitPaddleJob(
       const status = await timedProvider(
         trace,
         "paddleocr-poll",
-        () => pollPaddleOcr(jobId!, token),
+        () => pollPaddleOcr(jobId!, paddle.token),
       );
       if (status.state === "done") {
         downstreamStarted = true;
@@ -1862,8 +1877,8 @@ async function processPaddlePoll(
   trace: InspectionTrace,
   startedAt: number,
 ): Promise<"pending" | "finalized" | "fallback"> {
-  const token = env.PADDLEOCR_TOKEN?.trim();
-  if (!token) {
+  const paddle = paddleTokenForJob(data.job, env);
+  if (!paddle) {
     await processPaddleFallbackInline(
       data.job,
       "PADDLEOCR_TOKEN is not configured",
@@ -1878,7 +1893,7 @@ async function processPaddlePoll(
     status = await timedProvider(
       trace,
       "paddleocr-poll",
-      () => pollPaddleOcr(data.paddleJobId, token),
+      () => pollPaddleOcr(data.paddleJobId, paddle.token),
     );
   } catch (error) {
     await processPaddleFallbackInline(
