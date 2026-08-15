@@ -275,6 +275,18 @@ function providerFindingRows(log: InspectionLogRow): string {
   }
 }
 
+function paddleTokenBadge(log: InspectionLogRow): string {
+  if (!log.evidence_json) return "";
+  try {
+    const parsed = JSON.parse(log.evidence_json) as { paddleTokenSlot?: number };
+    return parsed.paddleTokenSlot === 1 || parsed.paddleTokenSlot === 2
+      ? `<span class="evidence-chip provider" title="PaddleOCR credential selected for this image"><i>T${parsed.paddleTokenSlot}</i>Paddle Token ${parsed.paddleTokenSlot}</span>`
+      : "";
+  } catch {
+    return "";
+  }
+}
+
 function formatProviderTime(milliseconds: number): string {
   return milliseconds > 0 ? ` · ${(milliseconds / 1000).toFixed(2)}s` : "";
 }
@@ -443,6 +455,7 @@ function logCards(logs: InspectionLogRow[]): string {
     }
     const providers = ocrProviderBadges(log);
     const providerFindings = providerFindingRows(log);
+    const tokenBadge = paddleTokenBadge(log);
     const providerBadges = providers.length > 0
       ? providers.map((provider) =>
           `<span class="evidence-chip provider" title="ใช้เวลา ${provider.milliseconds}ms"><i>${provider.icon}</i>${provider.label}${formatProviderTime(provider.milliseconds)}</span>`,
@@ -468,6 +481,7 @@ function logCards(logs: InspectionLogRow[]): string {
         <span class="evidence-chip ${kplusState.css}"><i>${kplusState.css === "found" ? "✓" : kplusState.css === "missing" ? "✕" : "?"}</i>${kplusState.text}</span>
         <span class="evidence-chip ${settlementState.css}"><i>${settlementState.css === "found" ? "✓" : settlementState.css === "missing" ? "✕" : "?"}</i>${settlementState.text}</span>
         ${providerBadges}
+        ${tokenBadge}
         </div>
         ${providerFindings}
         <span class="delivery-chip ${deliveryState.css}">${deliveryState.text}</span>

@@ -1645,6 +1645,7 @@ async function submitPaddleJob(
     );
     return;
   }
+  trace.paddleTokenSlot = paddle.slot;
 
   const store = d1StateStore(env.CONTROL_DB);
   const key = paddleStateKey(job);
@@ -1666,6 +1667,7 @@ async function submitPaddleJob(
         event: "paddleocr_submitted",
         messageId: job.messageId,
         paddleJobId: jobId,
+        paddleTokenSlot: paddle.slot,
       }));
     }
     for (let pollCount = 0; pollCount < PADDLEOCR_INLINE_POLLS; pollCount += 1) {
@@ -1930,6 +1932,7 @@ async function processPaddlePoll(
     );
     return "fallback";
   }
+  trace.paddleTokenSlot = paddle.slot;
   let status: Awaited<ReturnType<typeof pollPaddleOcr>>;
   try {
     status = await timedProvider(

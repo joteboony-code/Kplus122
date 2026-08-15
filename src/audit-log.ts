@@ -14,6 +14,7 @@ export interface ProviderFinding {
 export interface InspectionTrace {
   providers: string[];
   providerTimings: Record<string, number>;
+  paddleTokenSlot?: 1 | 2;
   paddleOcrText?: string;
   stage?: string;
   observedAmounts?: number[];
@@ -65,6 +66,7 @@ export async function recordInspectionLog(
     tid: job.referenceCode ?? null,
     outcome,
     providers: trace.providers.slice(0, 8),
+    paddleTokenSlot: trace.paddleTokenSlot ?? null,
     kplus: trace.hasKplus ?? null,
     settlement: trace.hasSettlement ?? null,
     amounts: (trace.observedAmounts ?? []).slice(0, 8),
