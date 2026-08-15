@@ -438,6 +438,9 @@ function numericSetting(value: string, name: string): number {
 function queueErrorText(error: unknown): string {
   return (error instanceof Error ? error.message : String(error)).slice(0, 500);
 }
+function isQueueQuotaError(error: unknown): boolean {
+  return /daily write operations limit|queues free tier|quota/i.test(queueErrorText(error));
+}
 
 async function sendQueueBodies(
   target: PendingQueueTarget,
@@ -585,6 +588,7 @@ async function drainPendingQueueJobs(env: Env): Promise<{
 
   let sent = 0;
   let deferred = 0;
+  let quotaBlocked = false;
   for (const [target, group] of groups) {
     for (let index = 0; index < group.length; index += 100) {
       const chunk = group.slice(index, index + 100);
@@ -607,8 +611,13 @@ async function drainPendingQueueJobs(env: Env): Promise<{
           count: chunk.length,
           error: queueErrorText(error),
         }));
+        if (isQueueQuotaError(error)) {
+          quotaBlocked = true;
+          break;
+        }
       }
     }
+    if (quotaBlocked) break;
   }
   return { sent, deferred };
 }

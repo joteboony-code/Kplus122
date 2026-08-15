@@ -60,6 +60,16 @@ function errorText(error: unknown): string {
   );
 }
 
+function isQueueQuotaError(error: unknown): boolean {
+  return /daily write operations limit|queues free tier|quota/i.test(errorText(error));
+}
+
+function nextQueueResetAttemptAt(now: number): number {
+  const reset = new Date(now);
+  reset.setUTCHours(24, 0, 0, 0);
+  return reset.getTime() + 5_000;
+}
+
 function jobIdentity(body: QueueJob): string {
   if ("messageId" in body && "webhookEventId" in body) {
     return `image:${body.webhookEventId}:${body.messageId}`;
@@ -101,7 +111,9 @@ export function pendingQueueItem(
     target,
     body,
     attempts: 0,
-    nextAttemptAt: now,
+    nextAttemptAt: error !== undefined && isQueueQuotaError(error)
+      ? nextQueueResetAttemptAt(now)
+      : now,
     lastError: error === undefined ? undefined : errorText(error),
   };
 }
@@ -207,7 +219,9 @@ export async function deferPendingQueueJob(
   now = Date.now(),
 ): Promise<void> {
   const attempts = item.attempts + 1;
-  const delaySeconds = Math.min(60 * 2 ** Math.min(attempts, 5), 60 * 60);
+  const delaySeconds = isQueueQuotaError(error)
+    ? Math.max(1, Math.ceil((nextQueueResetAttemptAt(now) - now) / 1000))
+    : Math.min(60 * 2 ** Math.min(attempts, 5), 60 * 60);
   await db.batch([
     upsertStatement(db, {
       ...item,

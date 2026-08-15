@@ -36,10 +36,10 @@ describe("pending queue jobs", () => {
     expect(item).toMatchObject({
       target: "images",
       attempts: 0,
-      nextAttemptAt: 1_000,
       lastError: "daily write operations limit",
       body: { messageId: "image-2", referenceCode: "28401904" },
     });
+    expect(item.nextAttemptAt).toBeGreaterThan(1_000);
   });
 
   it("expires deferred images after the Bangkok calendar day ends", () => {
